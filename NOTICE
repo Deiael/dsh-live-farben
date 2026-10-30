@@ -1,0 +1,11 @@
+NOTICE
+
+dsh-live-farben is based on dsh-livestream (MIT licensed).
+Original project: https://github.com/ (dsh-livestream)
+Thanks to the original authors for the architecture, OBS/Bilibili integration
+and the stage runtime. The original MIT license and copyright notice apply to
+the derived portions of this work.
+
+Bundled character artwork (assets/characters/dafeiyu/) is the author's own work
+and is licensed CC BY-NC-SA 4.0 unless stated otherwise in the character pack.
+It is not covered by the MIT license of the code.
