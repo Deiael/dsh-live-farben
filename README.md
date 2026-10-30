@@ -33,7 +33,7 @@ dsh plugin --profile desktop add dsh-live-farben
 From GitHub:
 
 ```sh
-dsh plugin --profile desktop add github:farben/dsh-live-farben
+dsh plugin --profile desktop add github:Deiael/dsh-live-farben
 ```
 
 Then add `dsh-live-farben` to the `dsh.profile.bundles` list of your profile and restart DeepSeek Harness.

@@ -4,14 +4,14 @@
   "description": "Let your DeepSeek Harness agent go live on Bilibili: reads chat, thanks gifts, welcomes viewers, remembers regulars, queues viewer-requested videos on stage, and speaks with its own TTS voice through OBS.",
   "type": "module",
   "license": "MIT",
-  "author": "Farben",
+  "author": "Deiael",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/farben/dsh-live-farben.git"
+    "url": "git+https://github.com/Deiael/dsh-live-farben.git"
   },
-  "homepage": "https://github.com/farben/dsh-live-farben#readme",
+  "homepage": "https://github.com/Deiael/dsh-live-farben#readme",
   "bugs": {
-    "url": "https://github.com/farben/dsh-live-farben/issues"
+    "url": "https://github.com/Deiael/dsh-live-farben/issues"
   },
   "exports": {
     ".": "./lib/index.js",
