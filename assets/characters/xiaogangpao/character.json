@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "id": "xiaogangpao",
+  "name": "小钢炮",
+  "names": [
+    "小钢炮",
+    "钢炮",
+    "炮哥",
+    "小炮"
+  ],
+  "voice": "zh_male_qingshuangnanda_uranus_bigtts",
+  "renderer": "image",
+  "license": "程序生成占位头像",
+  "image": {
+    "size": [
+      512,
+      512
+    ],
+    "idle": "art/portrait.png"
+  }
+}

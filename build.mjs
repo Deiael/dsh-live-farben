@@ -5,14 +5,31 @@
 // --client：只重建控制台和舞台页。注意 DSH 会把控制台代码缓存在内存里，要重启 DSH 才生效
 import { build } from 'esbuild';
 import { mkdir, rm } from 'node:fs/promises';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const webOnly = process.argv.includes('--client');
+
+/** 拆出来的 chunks 在 lib/chunks/ 里，依赖里 ../package.json 会找错地方，往上挪一层 */
+function patchChunkRequires() {
+  try {
+    const chunks = readdirSync('lib/chunks').filter((f) => f.endsWith('.js'));
+    for (const f of chunks) {
+      const p = join('lib/chunks', f);
+      const text = readFileSync(p, 'utf8');
+      const next = text.replace(/createRequire\(import\.meta\.url\)\("\.\.\/package\.json"\)/g, 'createRequire(import.meta.url)("../../package.json")');
+      if (next !== text) writeFileSync(p, next, 'utf8');
+    }
+  } catch {
+    // 没有 chunks 就跳过
+  }
+}
 
 if (!webOnly) {
   await rm('lib', { recursive: true, force: true });
   await mkdir('lib', { recursive: true });
   await build({
-    entryPoints: { index: 'src/dsh/index.ts', agent: 'src/dsh/agent.ts' },
+    entryPoints: { index: 'src/dsh/index.ts', agent: 'src/dsh/agent.ts', repair: 'src/dsh/repair.ts' },
     outdir: 'lib',
     splitting: true,
     chunkNames: 'chunks/[name]-[hash]',
@@ -54,4 +71,5 @@ await build({
   define: { 'process.env.NODE_ENV': '"production"' },
 });
 
+patchChunkRequires();
 console.log(webOnly ? 'built lib/client.js and lib/stage.js' : 'built lib/index.js, lib/agent.js, lib/client.js and lib/stage.js');

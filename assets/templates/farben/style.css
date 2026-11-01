@@ -1,0 +1,83 @@
+/*
+ * 「深海鲸歌」：Farben 的专属模板。深海蓝底 + 极光 / 星光 / 金色点缀，和默认的「海边小屋」一眼分得开。
+ * 改法：复制本目录到 DSH_HOME/dsh-live-farben/templates/<新名字>/，改 template.json 的 id/name。
+ */
+
+@font-face {
+  font-family: "ZCOOL KuaiLe";
+  src: url("fonts/ZCOOLKuaiLe.woff2") format("woff2");
+  font-display: block;
+}
+.ls-canvas.ls-template-farben { --ls-font-cute: "ZCOOL KuaiLe", var(--ls-font); }
+
+/* 深海背景：上浅下深，中间一团鲸歌蓝的光 */
+.ls-template-farben .ls-backdrop {
+  background:
+    radial-gradient(1200px 760px at 62% 18%, rgba(62, 230, 196, 0.16), transparent 62%),
+    radial-gradient(900px 620px at 22% 76%, rgba(255, 207, 107, 0.10), transparent 60%),
+    linear-gradient(180deg, #0a2237 0%, #061726 42%, #030c16 100%);
+}
+.ls-template-farben .ls-backdrop::before {
+  content: '';
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(1100px 520px at 50% 118%, rgba(0, 0, 0, 0.55), transparent 70%),
+    radial-gradient(900px 480px at 50% -10%, rgba(62, 230, 196, 0.10), transparent 70%);
+}
+
+/* 极光：两条缓慢摆动的光带 */
+.ls-template-farben .ls-backdrop .ls-layer-1 {
+  inset: -18% -8% auto -8%; height: 56%;
+  background:
+    linear-gradient(102deg, transparent 18%, rgba(62, 230, 196, 0.20) 32%, transparent 44%),
+    linear-gradient(96deg, transparent 46%, rgba(255, 207, 107, 0.12) 58%, transparent 70%),
+    linear-gradient(110deg, transparent 66%, rgba(96, 168, 255, 0.16) 76%, transparent 86%);
+  filter: blur(10px);
+  animation: farben-aurora 24s ease-in-out infinite alternate;
+}
+/* 只动透明度：模糊层不跟着位移，核显上省很多合成开销 */
+@keyframes farben-aurora {
+  from { opacity: 0.5; }
+  to { opacity: 0.95; }
+}
+
+/* 星点：慢慢闪 */
+.ls-template-farben .ls-backdrop .ls-layer-2 {
+  inset: 0;
+  background-image:
+    radial-gradient(2px 2px at 12% 22%, rgba(255, 255, 255, 0.8), transparent 70%),
+    radial-gradient(2px 2px at 28% 68%, rgba(160, 240, 255, 0.7), transparent 70%),
+    radial-gradient(1.6px 1.6px at 46% 14%, rgba(255, 255, 255, 0.6), transparent 70%),
+    radial-gradient(2px 2px at 63% 46%, rgba(255, 220, 160, 0.65), transparent 70%),
+    radial-gradient(1.6px 1.6px at 78% 26%, rgba(255, 255, 255, 0.55), transparent 70%),
+    radial-gradient(2px 2px at 88% 72%, rgba(160, 240, 255, 0.6), transparent 70%);
+  animation: farben-stars 7s ease-in-out infinite alternate;
+}
+@keyframes farben-stars { from { opacity: 0.35; } to { opacity: 0.9; } }
+
+/* 面板：更冷、更透，翡翠色细边 */
+.ls-template-farben .ls-board,
+.ls-template-farben .ls-chat,
+.ls-template-farben .ls-status,
+.ls-template-farben .ls-terminal {
+  border-color: var(--ls-panel-border);
+  box-shadow: 0 26px 66px -26px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* 标题、字幕：翡翠到金的渐变字，带一点光晕 */
+.ls-template-farben .ls-board-head span,
+.ls-template-farben .ls-board-title {
+  background: linear-gradient(100deg, #7ff5dd, #ffd98a 78%);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 22px rgba(62, 230, 196, 0.28);
+}
+
+/* 右下角签名水印 */
+.ls-template-farben .ls-overlay::after {
+  content: 'FARBEN · DEEP SEA';
+  position: absolute; right: 34px; bottom: 26px;
+  font: 600 18px/1 "ZCOOL KuaiLe", system-ui;
+  letter-spacing: 0.18em;
+  color: rgba(160, 235, 255, 0.16);
+}

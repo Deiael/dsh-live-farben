@@ -60,6 +60,8 @@ function useServices(): ConsoleServices | null {
 const PRESET_ID = 'dsh-live-farben';
 /** 游戏线（另一个会话里的她，专门玩游戏）用的预设 */
 const GAME_PRESET_ID = 'dsh-live-farben-game';
+/** 小钢炮（维修工）用的预设 */
+const REPAIR_PRESET_ID = 'dsh-live-farben-repair';
 const SECRET_REFS = { cookie: 'BILIBILI_COOKIE', tts: 'DOUBAO_TTS_API_KEY' } as const;
 
 interface PackEntry { id: string; name: string; builtin: boolean }
@@ -89,7 +91,7 @@ interface HostState {
   ok: boolean;
   show: ShowStatus;
   broadcast: BroadcastStatus;
-  settings: { roomId: number | null; character: string; template: string; voice: string; stagePort: number; idleAfterSec: number; gameChatGapSec?: number; distillModel: string; ownRooms: number[]; broadcast: boolean; areaId: number | null; liveTitle: string; pushProtocol: 'srt' | 'rtmp'; videoQuality: '1080p' | '720p'; streamKbps: number; asrPython: string; asrModel: string; boardText: string; noticeText?: string; pace?: { welcomeSec?: number | 'off'; thanksSec?: number; followSec?: number; chatPicks?: number }; blocked?: BlockedViewer[] };
+  settings: { roomId: number | null; character: string; template: string; voice: string; stagePort: number; idleAfterSec: number; gameChatGapSec?: number; plugEverySec?: number; diaryToDynamic?: boolean; persona?: 'sweet' | 'cool' | 'sassy'; radioMode?: boolean; unlockYuan?: number; distillModel: string; ownRooms: number[]; broadcast: boolean; areaId: number | null; liveTitle: string; pushProtocol: 'srt' | 'rtmp'; videoQuality: '1080p' | '720p'; streamKbps: number; asrPython: string; asrModel: string; boardText: string; noticeText?: string; pace?: { welcomeSec?: number | 'off'; thanksSec?: number; followSec?: number; chatPicks?: number }; blocked?: BlockedViewer[] };
   stageUrl: string;
   characters: PackEntry[];
   templates: PackEntry[];
@@ -116,9 +118,11 @@ interface Live {
   feed: FeedRow[];
   focus: Set<string>;
   brainDetail: string;
+  /** 这场直播用掉的 token（她说话/思考） */
+  usage: { tokens: number; turn: number; model?: string; yuan?: number } | null;
 }
 
-let live: Live = { status: null, broadcast: null, feed: [], focus: new Set(), brainDetail: '' };
+let live: Live = { status: null, broadcast: null, feed: [], focus: new Set(), brainDetail: '', usage: null };
 const liveListeners = new Set<() => void>();
 let source: EventSource | null = null;
 let feedSeq = 0;
@@ -154,6 +158,8 @@ function connectFeed(): void {
       setLive((l) => ({ ...l, focus: new Set(e.userIds) }));
     } else if (e.type === 'brain') {
       setLive((l) => ({ ...l, brainDetail: e.detail ?? '' }));
+    } else if (e.type === 'usage') {
+      setLive((l) => ({ ...l, usage: { tokens: Number(e.tokens) || 0, turn: Number(e.turn) || 0, ...(e.model ? { model: e.model } : {}), ...(Number.isFinite(Number(e.yuan)) ? { yuan: Number(e.yuan) } : {}) } }));
     }
   };
 }
@@ -165,17 +171,19 @@ function useLive(): Live {
 
 // ── 开播：会话 ────────────────────────────────────────
 
-/** 开一个用「大肥鱼直播」预设的会话（她直播用） */
-async function createBrainSession(svc: ConsoleServices, line: 'live' | 'game' = 'live'): Promise<string> {
+/** 开一个用「大肥鱼直播」预设的会话（她直播用；game=游戏线，repair=小钢炮） */
+async function createBrainSession(svc: ConsoleServices, line: 'live' | 'game' | 'repair' = 'live'): Promise<string> {
   const workspace = svc.workspaces.list.getSnapshot().items[0];
   if (!workspace) throw new Error('先在 DSH 里打开一个工作区。');
   const sessionId = await svc.sessions.create({ workspaceId: workspace.workspaceId });
-  const selected = await svc.remote.agentPresets.select(sessionId, line === 'game' ? GAME_PRESET_ID : PRESET_ID);
-  if (!selected.ok) throw new Error(selected.error?.message ?? `没能用上「${line === 'game' ? '大肥鱼直播·游戏线' : '大肥鱼直播'}」预设。`);
+  const presetId = line === 'game' ? GAME_PRESET_ID : line === 'repair' ? REPAIR_PRESET_ID : PRESET_ID;
+  const presetName = line === 'game' ? '大肥鱼直播·游戏线' : line === 'repair' ? '小钢炮·维修' : '大肥鱼直播';
+  const selected = await svc.remote.agentPresets.select(sessionId, presetId);
+  if (!selected.ok) throw new Error(selected.error?.message ?? `没能用上「${presetName}」预设。`);
   // 让会话就绪（agent 起来），身体才能往里推
   // 会话列表里一眼认得出是哪一场（不然叫「未命名」）
   const d = new Date();
-  const title = `直播${line === 'game' ? '游戏线' : ''} · ${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const title = `${line === 'game' ? '直播游戏线' : line === 'repair' ? '小钢炮' : '直播'} · ${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
   await svc.sessions.using(sessionId, { source: 'controllerOperation' }, async (reference) => {
     const { session } = await reference.ready;
     await session.rename?.(title)?.catch?.(() => {});
@@ -269,7 +277,7 @@ function Img({ src, className, fallback = null }: { src: string; className: stri
 
 export function Console() {
   const svc = useServices();
-  const { status, feed, focus, brainDetail, broadcast: liveBc } = useLive();
+  const { status, feed, focus, brainDetail, broadcast: liveBc, usage } = useLive();
   const [host, setHost] = useState<HostState | null>(null);
   const [busy, error, run] = useBusy();
   const [room, setRoom] = useState('');
@@ -285,6 +293,35 @@ export function Console() {
   const show = status ?? host?.show ?? null;
   const settings = host?.settings;
 
+  // 自动换脑：上下文快满（10 万 token）或开播满 2 小时，就换个新会话；推流不断，观众基本无感
+  const rotatingAt = useRef(0);
+  const sessionStartedAt = useRef(Date.now());
+  useEffect(() => {
+    if (!svc || !show?.onAir) return;
+    // 先默认关掉自动换脑：最近会话起不来，等排查清楚再开（localStorage 里设 dl-auto-rotate=1 打开）
+    if (localStorage.getItem('dl-auto-rotate') !== '1') return;
+    const timer = setInterval(() => {
+      if (Date.now() - rotatingAt.current < 5 * 60_000) return;
+      const tokens = Number(usage?.tokens ?? 0);
+      const tooLong = Date.now() - sessionStartedAt.current >= 2 * 60 * 60_000;
+      if (tokens < 100000 && !tooLong) return;
+      rotatingAt.current = Date.now();
+      void (async () => {
+        try {
+          const sessionId = await createBrainSession(svc);
+          const saved = JSON.parse(localStorage.getItem('dl-line-sessions') ?? '{}') as { game?: string; repair?: string };
+          await api('onair', { sessionId, gameSessionId: saved.game, repairSessionId: saved.repair });
+          sessionStartedAt.current = Date.now();
+          localStorage.setItem('dl-live-session', sessionId);
+          await refresh();
+        } catch {
+          // 换脑失败就等下一次；直播继续跑
+        }
+      })();
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [show?.onAir, svc, usage?.tokens]);
+
   const goLive = () => run(async () => {
     if (!svc) throw new Error('插件还没准备好，刷新一下页面再试。');
     // 推流到 B 站：先开播拿推流码、OBS 推上流（可能要扫码人脸认证），推上了她再开口
@@ -295,9 +332,32 @@ export function Console() {
     const sessionId = await createBrainSession(svc);
     // 游戏线：没装 dsh-game（预设里没有游戏工具）也开得出来，只是用不上
     const gameSessionId = await createBrainSession(svc, 'game').catch(() => undefined);
-    await api('onair', { sessionId, gameSessionId });
+    // 小钢炮：维修工，回复只进舞台右上角气泡
+    const repairSessionId = await createBrainSession(svc, 'repair').catch(() => undefined);
+    localStorage.setItem('dl-line-sessions', JSON.stringify({ game: gameSessionId, repair: repairSessionId }));
+    await api('onair', { sessionId, gameSessionId, repairSessionId });
+    sessionStartedAt.current = Date.now();
+    localStorage.setItem('dl-live-session', sessionId);
     await refresh();
   });
+
+  // 千问连续失败：把直播会话的模型切到 DeepSeek（每个会话只切一次）
+  useEffect(() => {
+    if (!svc || !show?.onAir || !(host as { modelFallback?: boolean } | null)?.modelFallback) return;
+    const sessionId = localStorage.getItem('dl-live-session');
+    if (!sessionId || localStorage.getItem('dl-model-switched') === sessionId) return;
+    localStorage.setItem('dl-model-switched', sessionId);
+    void (async () => {
+      try {
+        await svc.sessions.using(sessionId, { source: 'controllerOperation' }, async (reference) => {
+          const session = (await reference.ready).session as unknown as { selectModel?: (choice: unknown) => Promise<unknown> };
+          await session.selectModel?.({ provider: 'deepseek-official', model: 'deepseek-flash' });
+        });
+      } catch {
+        // 切模型失败就先这样，直播继续跑
+      }
+    })();
+  }, [host, show?.onAir, svc]);
 
   const endLive = () => run(async () => { await api('offair', {}); await refresh(); });
 
@@ -346,11 +406,13 @@ export function Console() {
               <Img className="dl-avatar-img" src={stageFile(host?.stageUrl, 'characters', character, 'art/portrait.webp')} fallback={<BroadcastGlyph />} />
             </span>
             <div className="dl-brand-text">
-              <h1>大肥鱼直播{show?.onAir ? <span className="dl-onair"><i />LIVE</span> : <span className="dl-offair">未开播</span>}</h1>
+              <h1>鱼煲直播{show?.onAir ? <span className="dl-onair"><i />LIVE</span> : <span className="dl-offair">未开播</span>}</h1>
               <div className="dl-pills">
                 <span className="dl-pill"><Dot tone={brainTone} />{brainText}</span>
                 <span className="dl-pill"><Dot tone={connTone} />直播间{CONN_TEXT[conn] ?? conn}{show?.live.room?.title ? ` · ${show.live.room.title}` : ''}</span>
                 <span className="dl-pill"><Dot tone={show?.stageWatchers ? 'ok' : 'idle'} />{show?.stageWatchers ? `OBS 已连上 ${show.stageWatchers} 个` : 'OBS 还没打开舞台'}</span>
+                {usage && <span className="dl-pill" title="这场直播她说话、思考用掉的 token 总量（输入+输出，含缓存）">⚡ 本场 {fmtTokens(usage.tokens)} tokens{usage.yuan !== undefined ? ` · ¥${usage.yuan.toFixed(2)}` : ''}{usage.model ? ` · ${usage.model}` : ''}</span>}
+                {show && <span className="dl-pill" title="本场数据：在线人数 / 她说过的句子数">📊 在线 {show.live.stats.online ?? '–'} · 她说 {show.lines.length} 句</span>}
                 {bc && bc.phase !== 'idle' && <BroadcastPill bc={bc} />}
               </div>
             </div>
@@ -511,6 +573,34 @@ export function Console() {
               <div className="dl-row">
                 <input defaultValue={settings?.gameChatGapSec ?? 15} inputMode="numeric" title="弹幕间隔（秒）" onBlur={(e) => choose({ gameChatGapSec: Number(e.target.value.replace(/\D/g, '')) || 15 })} />
                 <span className="dl-meta">秒：玩游戏时弹幕至少隔这么久推给她一次</span>
+              </div>
+              <div className="dl-row">
+                <input defaultValue={settings?.plugEverySec ?? 600} inputMode="numeric" title="提醒点赞（秒）" onBlur={(e) => choose({ plugEverySec: Number(e.target.value.replace(/\D/g, '')) || 0 })} />
+                <span className="dl-meta">秒：隔这么久顺口提醒一次「点点赞、点点关注」（0 = 不提）</span>
+              </div>
+              <div className="dl-row">
+                <button className={`dl-switch${settings?.diaryToDynamic ? ' dl-on' : ''}`} onClick={() => choose({ diaryToDynamic: !settings?.diaryToDynamic })}>
+                  <i /><span>下播自动发切片动态</span>
+                </button>
+                <span className="dl-meta">下播后把今天的高光和切片文案发到 B 站动态</span>
+              </div>
+              <div className="dl-row">
+                {(['sweet', 'cool', 'sassy'] as const).map((p) => (
+                  <button key={p} className={`dl-switch${settings?.persona === p ? ' dl-on' : ''}`} onClick={() => choose({ persona: p })}>
+                    <i /><span>{p === 'sweet' ? '甜妹' : p === 'cool' ? '御姐' : '毒舌'}</span>
+                  </button>
+                ))}
+                <span className="dl-meta">人设：换人设会一起换音色</span>
+              </div>
+              <div className="dl-row">
+                <button className={`dl-switch${settings?.radioMode ? ' dl-on' : ''}`} onClick={() => choose({ radioMode: !settings?.radioMode })}>
+                  <i /><span>深夜电台</span>
+                </button>
+                <span className="dl-meta">语速慢、轻声，多读观众来信和小故事</span>
+              </div>
+              <div className="dl-row">
+                <input defaultValue={settings?.unlockYuan ?? 30} inputMode="numeric" title="礼物解锁（元）" onBlur={(e) => choose({ unlockYuan: Number(e.target.value.replace(/\D/g, '')) || 0 })} />
+                <span className="dl-meta">元：礼物满这么多，她说句特别的</span>
               </div>
               <div className="dl-pace">
                 {PACE_FIELDS.map(([key, label]) => (
@@ -752,6 +842,13 @@ function GearGlyph() {
 }
 
 /** 醒目留言按金额分档（和舞台一样的 B 站配色） */
+/** 12400 → 1.2 万 */
+function fmtTokens(n: number): string {
+  if (n >= 1e8) return `${(n / 1e8).toFixed(2)} 亿`;
+  if (n >= 1e4) return `${(n / 1e4).toFixed(1)} 万`;
+  return n.toLocaleString();
+}
+
 function scTier(yuan: number): string {
   if (yuan >= 2000) return 'red';
   if (yuan >= 1000) return 'orange';

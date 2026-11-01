@@ -20,7 +20,7 @@ import type { GameSource, StageEvent } from '../stage/protocol';
 import { splitByMood } from '../core/moodText';
 import { speakable } from '../core/speakable';
 import { GUEST_VOICE } from '../body/voices';
-import { agentReady, asr, broadcast, cookie, DEFAULT_BOARD, hooks, placeGame, publishBoard, publishNotice, SECRETS, social, takeLive, currentCharacter, currentMoods, dm, packs, prepareSpeech, server, settings, show, updateSettings, type BlockedViewer, type Pace, type Settings } from './runtime';
+import { agentReady, asr, broadcast, cookie, DEFAULT_BOARD, hooks, modelFallbackActive, placeGame, publishBoard, publishNotice, SECRETS, social, takeLive, currentCharacter, currentMoods, dm, packs, prepareSpeech, server, settings, show, updateSettings, type BlockedViewer, type Pace, type Settings } from './runtime';
 
 export const name = 'dsh-live-farben';
 export const inject = ['connection'];
@@ -52,6 +52,7 @@ function state() {
     templates: packs.list('templates'),
     asr: { available: asr.available },
     defaultBoard: DEFAULT_BOARD,
+    modelFallback: modelFallbackActive(),
   };
 }
 
@@ -112,6 +113,19 @@ let waitingOffair: NodeJS.Timeout | null = null;
 /** 舞台的谢幕画面放多久（stage/store.ts 的 ENDING_MS 是 16 秒）：放完再停推流 */
 const ENDING_SCENE_MS = 17_000;
 
+/** 走「下播」流程：先道别，结束这场，谢幕放完再停推 */
+function endShow(): void {
+  show.endLive();
+  if (broadcast.streaming && !waitingOffair) {
+    waitingOffair = setInterval(() => {
+      if (show.isOnAir) return;
+      if (waitingOffair) clearInterval(waitingOffair);
+      waitingOffair = null;
+      setTimeout(() => void broadcast.stop(), ENDING_SCENE_MS);
+    }, 1000);
+  }
+}
+
 /** 断多久以内算重启（接着播）；更久就当上一场已经结束了 */
 const RESUME_WITHIN_MS = 10 * 60_000;
 
@@ -151,6 +165,15 @@ async function resumeLive(ctx: HostContext, stopped: () => boolean): Promise<voi
       console.warn(`[dsh-live-farben] 恢复游戏线的会话失败：${String(result.error?.message ?? result.error)}`);
       saved.gameSessionId = undefined;
       saved.playing = undefined;
+    }
+  }
+  // 小钢炮的会话同理：接不回来就退回规则回复
+  if (saved.repairSessionId) {
+    const controller = ctx.get?.('sessionController');
+    const result = await controller.agents.resolveAgent(saved.repairSessionId).catch((err: Error) => ({ error: err }));
+    if ('error' in result) {
+      console.warn(`[dsh-live-farben] 恢复小钢炮的会话失败：${String(result.error?.message ?? result.error)}`);
+      saved.repairSessionId = undefined;
     }
   }
   // 等 agent 子插件把推消息的钩子装上
@@ -207,6 +230,20 @@ export function apply(ctx: HostContext): void {
     if (patch.voice !== undefined) next.voice = String(patch.voice).trim();
     if (patch.idleAfterSec !== undefined) next.idleAfterSec = Math.max(10, Math.min(600, Number(patch.idleAfterSec) || 45));
     if (patch.gameChatGapSec !== undefined) next.gameChatGapSec = Math.max(5, Math.min(120, Number(patch.gameChatGapSec) || 15));
+    if (patch.plugEverySec !== undefined) next.plugEverySec = Math.max(0, Math.min(3600, Number(patch.plugEverySec) || 0));
+    if (patch.autoPlay !== undefined) next.autoPlay = Boolean(patch.autoPlay);
+    if (patch.diaryToDynamic !== undefined) next.diaryToDynamic = Boolean(patch.diaryToDynamic);
+    if (patch.persona !== undefined) {
+      const p = String(patch.persona);
+      next.persona = p === 'cool' || p === 'sassy' ? p : 'sweet';
+      // 人设跟音色一起换：甜妹=甜美小媛，御姐=高冷御姐，毒舌=双快思思
+      next.voice = next.persona === 'cool' ? 'zh_female_gaolengyujie_uranus_bigtts' : next.persona === 'sassy' ? 'zh_female_shuangkuaisisi_uranus_bigtts' : 'zh_female_tianmeixiaoyuan_uranus_bigtts';
+    }
+    if (patch.radioMode !== undefined) next.radioMode = Boolean(patch.radioMode);
+    if (patch.unlockYuan !== undefined) next.unlockYuan = Math.max(0, Math.min(10000, Number(patch.unlockYuan) || 0));
+    if (patch.autoSeasonBv !== undefined) next.autoSeasonBv = String(patch.autoSeasonBv).trim() || settings.autoSeasonBv;
+    if (patch.offAt !== undefined) next.offAt = String(patch.offAt).trim();
+    if (patch.offQuietMin !== undefined) next.offQuietMin = Math.max(1, Math.min(180, Number(patch.offQuietMin) || 20));
     if (patch.pace !== undefined) next.pace = cleanPace({ ...settings.pace, ...patch.pace });
     if (patch.distillModel !== undefined) next.distillModel = String(patch.distillModel).trim() || settings.distillModel;
     if (patch.broadcast !== undefined) next.broadcast = !!patch.broadcast;
@@ -257,9 +294,9 @@ export function apply(ctx: HostContext): void {
   }, 'disconnect');
 
   route('/api/dsh-live-farben/onair', ['POST'], async (request) => {
-    const { sessionId, gameSessionId } = await body<{ sessionId?: string; gameSessionId?: string }>(request);
+    const { sessionId, gameSessionId, repairSessionId } = await body<{ sessionId?: string; gameSessionId?: string; repairSessionId?: string }>(request);
     if (!sessionId) return fail('缺她直播用的会话');
-    show.goLive(sessionId, gameSessionId || undefined);
+    show.goLive(sessionId, gameSessionId || undefined, repairSessionId || undefined);
     // 先推上流、后开播的：这一场一开始就不是彩排
     if (broadcast.streaming) show.markBroadcast();
     dm.newShow();
@@ -268,16 +305,7 @@ export function apply(ctx: HostContext): void {
   }, 'onair');
 
   route('/api/dsh-live-farben/offair', ['POST'], () => {
-    show.endLive();
-    // 在推流：等她道别说完（这场结束），舞台放完谢幕，再停推、下播（以前一说完就断，观众看不到谢幕）
-    if (broadcast.streaming && !waitingOffair) {
-      waitingOffair = setInterval(() => {
-        if (show.isOnAir) return;
-        if (waitingOffair) clearInterval(waitingOffair);
-        waitingOffair = null;
-        setTimeout(() => void broadcast.stop(), ENDING_SCENE_MS);
-      }, 1000);
-    }
+    endShow();
     return json(state());
   }, 'offair');
 
@@ -403,4 +431,23 @@ export function apply(ctx: HostContext): void {
     });
     return new Response(stream, { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' } });
   }, 'events');
+
+  // 每天到点（默认 04:00）：如果有一阵子没人点播了，就自动下播
+  let autoOffDay = '';
+  setInterval(() => {
+    if (!settings.offAt) return;
+    const m = /^(\d{1,2}):(\d{2})$/.exec(settings.offAt.trim());
+    if (!m) return;
+    const now = new Date();
+    const target = new Date(now);
+    target.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    if (now < target) return;
+    if (now.getTime() - target.getTime() > 6 * 3600_000) return;
+    const key = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    if (autoOffDay === key) return;
+    if (!show.isOnAir) return;
+    if (Date.now() - show.lastViewerRequestAt < settings.offQuietMin * 60_000) return;
+    autoOffDay = key;
+    endShow();
+  }, 60_000).unref?.();
 }

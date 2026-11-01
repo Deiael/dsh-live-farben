@@ -16,6 +16,16 @@ export interface PlayRequest {
   url: string;
   fromSec: number;
   untilSec: number;
+  /** 视频总时长（秒）：超过 10 分钟不让放 */
+  durationSec?: number;
+  /** 没人点播时自动放合集里的视频（观众点播可以立刻打断） */
+  auto?: boolean;
+  /** 舞台上的地址（默认走 /video?id=；唱歌时走 /song?id=） */
+  src?: string;
+  /** 放的是歌而不是视频：舞台不显示画面，改显示歌词 */
+  kind?: 'video' | 'audio';
+  /** LRC 歌词（唱歌时用） */
+  lyrics?: string;
 }
 
 export interface Playing extends PlayRequest {
@@ -41,6 +51,8 @@ const LOAD_MS = 25_000;
 export class Player {
   private playing: Playing | null = null;
   private timer: NodeJS.Timeout | null = null;
+  /** 下一条点播：地址先给舞台，让它后台 buffer 好，轮到它时几乎立刻出画面 */
+  private prefetched: { id: string; url: string } | null = null;
 
   constructor(private readonly stage: Stage, private readonly onEnd: (video: Playing, how: PlayEnd, playedSec: number) => void) {}
 
@@ -48,12 +60,26 @@ export class Player {
     return this.playing;
   }
 
-  /** 换成这个视频（正在放的直接换掉，不算放完） */
-  play(request: PlayRequest): Playing {
+  /** 预加载下一条；id 为空就取消。队列一变（有人插队）就重新指一次 */
+  prefetch(id: string | null, url: string | null): void {
+    if (!id || !url) {
+      if (!this.prefetched) return;
+      this.prefetched = null;
+      this.stage.broadcast({ type: 'prefetch', id: null, src: null });
+      return;
+    }
+    if (this.prefetched?.id === id) return;
+    this.prefetched = { id, url };
+    this.stage.broadcast({ type: 'prefetch', id, src: `/video?id=${id}` });
+  }
+
+  /** 换成这个视频（正在放的直接换掉，不算放完）；id 传排队项的 id，就能和预加载用同一个地址 */
+  play(request: PlayRequest, id = randomUUID()): Playing {
     this.clear();
-    const video: Playing = { ...request, id: randomUUID(), startedAt: Date.now() };
+    const video: Playing = { ...request, id, startedAt: Date.now() };
     this.playing = video;
-    this.stage.broadcast({ type: 'media', action: 'play', id: video.id, title: video.title, up: video.up, src: `/video?id=${video.id}`, from: video.fromSec, until: video.untilSec });
+    this.prefetch(null, null);
+    this.stage.broadcast({ type: 'media', action: 'play', id: video.id, title: video.title, up: video.up, src: video.src ?? `/video?id=${video.id}`, from: video.fromSec, until: video.untilSec, ...(video.kind ? { kind: video.kind } : {}), ...(video.lyrics ? { lyrics: video.lyrics } : {}) });
     // 舞台页开着：等它回执开始放；没开着（彩排时）按时长放完
     if (this.stage.watchers) this.arm(LOAD_MS, 'error');
     else this.arm((video.untilSec - video.fromSec) * 1000, 'ended');
@@ -65,6 +91,7 @@ export class Player {
     const video = this.playing;
     if (!video) return null;
     this.clear();
+    this.prefetch(null, null);
     return { video, playedSec: this.played(video) };
   }
 
@@ -104,7 +131,7 @@ export class Player {
 
   /** 舞台服务器转发视频时问：这个 id 现在对应哪个地址 */
   source(id: string): string | null {
-    return this.playing?.id === id ? this.playing.url : null;
+    return this.playing?.id === id ? this.playing.url : this.prefetched?.id === id ? this.prefetched.url : null;
   }
 
   private finish(how: PlayEnd): void {

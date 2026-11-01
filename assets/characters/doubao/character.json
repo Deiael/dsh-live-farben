@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "doubao",
+  "name": "豆包",
+  "names": ["豆包", "小豆", "豆包大人", "Doubao", "doubao"],
+  "voice": "zh_female_tianmeixiaoyuan_uranus_bigtts",
+  "renderer": "image",
+  "license": "占位形象（程序生成），可替换为自己的立绘",
+  "image": {
+    "size": [800, 1000],
+    "idle": "idle.png"
+  }
+}

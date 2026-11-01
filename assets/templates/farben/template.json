@@ -1,0 +1,239 @@
+{
+  "format": 1,
+  "id": "farben",
+  "name": "深海鲸歌 · Farben 专属",
+  "canvas": [
+    1920,
+    1080
+  ],
+  "theme": {
+    "--ls-accent": "#3ee6c4",
+    "--ls-accent-2": "#ffcf6b",
+    "--ls-text": "#eaf7ff",
+    "--ls-dim": "rgba(206, 232, 255, 0.68)",
+    "--ls-unlit": "rgba(198, 226, 255, 0.32)",
+    "--ls-ink": "#04121f",
+    "--ls-panel": "linear-gradient(160deg, rgba(10, 32, 50, 0.74), rgba(3, 12, 22, 0.84))",
+    "--ls-panel-strong": "linear-gradient(180deg, rgba(9, 28, 44, 0.92), rgba(3, 10, 18, 0.95))",
+    "--ls-panel-border": "rgba(62, 230, 196, 0.34)",
+    "--ls-rim": "rgba(62, 230, 196, 0.46)",
+    "--ls-bubble": "rgba(62, 230, 196, 0.10)",
+    "--ls-shadow": "0 26px 66px -26px rgba(0, 0, 0, 0.8)"
+  },
+  "widgets": [
+    {
+      "type": "status",
+      "x": 40,
+      "y": 30,
+      "options": {
+        "room": true
+      }
+    },
+    {
+      "type": "ai-label",
+      "x": 1480,
+      "y": 40,
+      "w": 400
+    },
+    {
+      "type": "board",
+      "x": 40,
+      "y": 112,
+      "w": 420,
+      "h": 370
+    },
+    {
+      "type": "chat",
+      "x": 40,
+      "y": 498,
+      "w": 420,
+      "h": 544,
+      "options": {
+        "rows": 6
+      }
+    },
+    {
+      "type": "character",
+      "x": 700,
+      "y": 40,
+      "w": 520
+    },
+    {
+      "type": "subtitle",
+      "x": 580,
+      "y": 720,
+      "w": 760,
+      "h": 330,
+      "options": {
+        "pageChars": 22
+      }
+    },
+    {
+      "type": "rice",
+      "x": 1410,
+      "y": 120,
+      "w": 470
+    },
+    {
+      "type": "alerts",
+      "x": 1410,
+      "y": 344,
+      "w": 490,
+      "options": {
+        "max": 2
+      }
+    },
+    {
+      "type": "queue",
+      "x": 1410,
+      "y": 560,
+      "w": 470,
+      "h": 170,
+      "options": {
+        "title": "点播排队",
+        "seconds": 6
+      }
+    },
+    {
+      "type": "terminal",
+      "x": 1430,
+      "y": 740,
+      "w": 450,
+      "h": 300,
+      "options": {
+        "rows": 4
+      }
+    },
+    {
+      "type": "effects",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080
+    },
+    {
+      "type": "scene",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080
+    }
+  ],
+  "layouts": {
+    "video": [
+      {
+        "type": "board",
+        "hidden": true
+      },
+      {
+        "type": "queue",
+        "x": 40,
+        "y": 112,
+        "w": 420,
+        "h": 210
+      },
+      {
+        "type": "video",
+        "x": 490,
+        "y": 112,
+        "w": 1170,
+        "h": 658
+      },
+      {
+        "type": "subtitle",
+        "x": 490,
+        "y": 786,
+        "w": 1170,
+        "h": 256
+      },
+      {
+        "type": "character",
+        "x": 1676,
+        "y": 650,
+        "scale": 0.42
+      },
+      {
+        "type": "alerts",
+        "x": 1180,
+        "y": 132
+      },
+      {
+        "type": "rice",
+        "hidden": true
+      },
+      {
+        "type": "terminal",
+        "x": 490,
+        "y": 786,
+        "w": 1170,
+        "h": 256
+      }
+    ],
+    "game": [
+      {
+        "type": "board",
+        "hidden": true
+      },
+      {
+        "type": "queue",
+        "hidden": true
+      },
+      {
+        "type": "orders",
+        "x": 40,
+        "y": 112,
+        "w": 420,
+        "h": 420
+      },
+      {
+        "type": "chat",
+        "x": 40,
+        "y": 548,
+        "w": 420,
+        "h": 494
+      },
+      {
+        "type": "game",
+        "x": 480,
+        "y": 96,
+        "w": 1400,
+        "h": 788
+      },
+      {
+        "type": "subtitle",
+        "x": 480,
+        "y": 896,
+        "w": 1400,
+        "h": 164,
+        "options": {
+          "pageChars": 22
+        }
+      },
+      {
+        "type": "terminal",
+        "x": 480,
+        "y": 896,
+        "w": 1400,
+        "h": 164,
+        "options": {
+          "rows": 3
+        }
+      },
+      {
+        "type": "character",
+        "x": 1690,
+        "y": 530,
+        "scale": 0.36
+      },
+      {
+        "type": "alerts",
+        "x": 1370,
+        "y": 112
+      },
+      {
+        "type": "rice",
+        "hidden": true
+      }
+    ]
+  }
+}

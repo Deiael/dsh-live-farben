@@ -104,7 +104,7 @@ export type EffectSpec = string | { name: string; ms?: number; [option: string]:
  * game：她在玩的游戏的画面位（她在直播里玩游戏时才有）：网页画面直接放这里；游戏窗口由 OBS 抓来叠在这一块上
  * effects：整屏特效层：进场、礼物、上舰时放的彩带、横幅……（放在画布 0,0，宽高和画布一样，排在 scene 前面）
  */
-export type WidgetType = 'character' | 'subtitle' | 'chat' | 'alerts' | 'status' | 'ai-label' | 'reply' | 'rice' | 'terminal' | 'scene' | 'video' | 'effects' | 'board' | 'game' | 'orders' | 'queue';
+export type WidgetType = 'character' | 'subtitle' | 'chat' | 'alerts' | 'status' | 'ai-label' | 'reply' | 'rice' | 'terminal' | 'scene' | 'video' | 'effects' | 'board' | 'game' | 'orders' | 'queue' | 'regulars' | 'story' | 'book' | 'poll' | 'repair' | 'visit' | 'gifts';
 
 /** 点播排队的一行：观众点了、排着等放的视频 */
 export interface StageQueueItem {
@@ -115,6 +115,74 @@ export interface StageQueueItem {
   title: string;
   /** 正在放（队列里通常只有一个排在第一个） */
   playing?: boolean;
+  /** 这条是点播视频还是点歌 */
+  kind?: 'video' | 'song';
+}
+
+/** 常客榜的一行 */
+export interface StageRegular {
+  uid: string;
+  name: string;
+  /** 称号：新朋友 / 熟人 / 老朋友 / 常客 / 家人 */
+  title: string;
+  visits: number;
+  affection: number;
+}
+
+/** 共创连续剧的一章（舞台上投票用） */
+export interface StageStory {
+  id: number;
+  chapter: number;
+  title: string;
+  question: string;
+  a: string;
+  b: string;
+  votesA: number;
+  votesB: number;
+  chosen?: 'a' | 'b' | null;
+  summary?: string | null;
+}
+
+/** 礼物榜里的一位 */
+export interface StageGiftPerson {
+  name: string;
+  total: number;
+  gifts: Array<{ gift: string; count: number }>;
+}
+
+/** 查房：正在看哪个直播间 */
+export interface StageVisit {
+  room: number;
+  title: string;
+  until: number;
+}
+
+/** 小钢炮说的一句话 */
+export interface RepairMessage {
+  id: string;
+  text: string;
+  at: number;
+}
+
+/** 通用投票（开播主题 / 选书 / 继续·换章·讨论） */
+export interface StagePoll {
+  question: string;
+  options: string[];
+  votes: number[];
+  endsAt: number;
+  done: boolean;
+}
+
+/** 读书会：舞台上显示的书和进度 */
+export interface StageBook {
+  id: string;
+  title: string;
+  chapter: number;
+  chapterTitle: string;
+  para: number;
+  paragraphs: number;
+  total: number;
+  text: string;
 }
 
 /** 点单栏的一行（见 core/orders） */
@@ -192,12 +260,32 @@ export type StageEvent =
   | { v: 1; type: 'orders'; items: StageOrder[]; at: number }
   /** 点播排队：排着等放的视频（舞台上一页一条、自动轮播） */
   | { v: 1; type: 'queue'; items: StageQueueItem[]; at: number }
+  /** 常客榜：好感度最高的几位老观众 */
+  | { v: 1; type: 'regulars'; items: StageRegular[]; at: number }
+  /** 共创连续剧：这一章的标题、选项和票数 */
+  | { v: 1; type: 'story'; story: StageStory }
+  /** 剧情换场景：整屏背景图（null = 回到模板默认背景） */
+  | { v: 1; type: 'scene'; src: string | null }
+  /** 读书会：正在读的书、章节、进度（null = 收起） */
+  | { v: 1; type: 'book'; book: StageBook | null }
+  /** 通用投票：问题、选项、票数、截止时间 */
+  | { v: 1; type: 'poll'; poll: StagePoll }
+  /** 小钢炮（维修工）的对话气泡 */
+  | { v: 1; type: 'repair'; messages: RepairMessage[]; busy: boolean }
+  /** 查房：正在串门哪个直播间（null = 没在串门） */
+  | { v: 1; type: 'visit'; visit: StageVisit | null }
+  /** 礼物榜：本日/本月 */
+  | { v: 1; type: 'gifts'; today: StageGiftPerson[]; month: StageGiftPerson[] }
+  /** 捉迷藏：影遁消失 / 重新出现 / 结束 */
+  | { v: 1; type: 'hide'; phase: 'hide' | 'reveal' | 'end' }
   /** 滚动通知（主人在控制台写的，出状况时告诉观众）；空串收起 */
   | { v: 1; type: 'notice'; text: string; at: number }
   /** isUpdate：同 id 再来一次（礼物连击累加） */
   | { v: 1; type: 'live'; event: StageLiveEvent; isUpdate: boolean; at: number }
   /** 她正在回应这几位观众（弹幕流里高亮） */
   | { v: 1; type: 'focus'; userIds: string[]; at: number }
+  /** 预加载下一条点播：舞台先在后台把视频缓冲好，轮到它时直接出画面；id 为空表示取消 */
+  | { v: 1; type: 'prefetch'; id: string | null; src: string | null; at: number }
   | { v: 1; type: 'room'; online?: number; title?: string; onAir: boolean; at: number }
   /** 这场直播她用掉的 token（累计）；turn 是刚结束的这一步用的，model 是哪个模型 */
   | { v: 1; type: 'usage'; tokens: number; turn?: number; model?: string; at: number }
@@ -205,7 +293,7 @@ export type StageEvent =
    * 放视频（她用 play_video）：舞台换成 video 布局，从 from 秒放到 until 秒；她说话时视频声音调小。
    * 中途连上的舞台从 from + (现在 - at) 接着放。stop：停下、换回平时的布局
    */
-  | { v: 1; type: 'media'; action: 'play'; id: string; title: string; up: string; src: string; from: number; until: number; at: number }
+  | { v: 1; type: 'media'; action: 'play'; id: string; title: string; up: string; src: string; from: number; until: number; at: number; kind?: 'video' | 'audio'; lyrics?: string }
   | { v: 1; type: 'media'; action: 'stop'; id: string; at: number }
   /** 她在直播里玩游戏：游戏画面上舞台（null：这局结束了） */
   | { v: 1; type: 'game'; source: GameSource | null; at: number }

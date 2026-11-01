@@ -13,7 +13,7 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const OBS_NAME = 'dsh-live-farben';
@@ -56,10 +56,31 @@ function hasIntelGraphics(): boolean {
   return existsSync('C:\\Windows\\System32\\igd10iumd64.dll') || existsSync('C:\\Windows\\System32\\igfxcmrt64.dll');
 }
 
+/** 这次 OBS 启动时真正可用的编码器（读它自己的日志，比猜驱动 DLL 靠谱） */
+function obsVideoEncoders(): string {
+  try {
+    const dir = join(OBS_DIR, 'logs');
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith('.txt'))
+      .map((f) => ({ f, at: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.at - a.at);
+    if (!files.length) return '';
+    return readFileSync(join(dir, files[0].f), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 export function pickEncoder(choice: EncoderChoice = 'auto'): 'nvenc' | 'qsv' | 'x264' {
   if (choice === 'nvenc' || choice === 'qsv' || choice === 'x264') return choice;
+  const log = obsVideoEncoders();
+  // OBS 日志里 "Video Encoders" 一段列的是这台机器真正能用的编码器
+  if (log.includes('obs_nvenc_h264_tex')) return 'nvenc';
+  if (log.includes('obs_qsv11_v2')) return 'qsv';
+  if (log.includes('obs_x264')) return 'x264';
+  // 日志还没写出来时按硬件兜底
   if (hasNvidia()) return 'nvenc';
-  if (hasIntelGraphics()) return 'qsv';
+  if (/Intel/i.test(process.env.PROCESSOR_IDENTIFIER ?? '') || hasIntelGraphics()) return 'qsv';
   return 'x264';
 }
 
@@ -203,7 +224,26 @@ export async function prepareObs(obs: Obs, stageUrl: string, kbps = 4500, qualit
   }
   // 画质档位：720p 给核显/弱网用，渲染和编码压力都小一半
   const size = quality === '720p' ? { width: 1280, height: 720 } : { width: 1920, height: 1080 };
-  await obs.call('SetVideoSettings', { fpsNumerator: 30, fpsDenominator: 1, baseWidth: size.width, baseHeight: size.height, outputWidth: size.width, outputHeight: size.height });
+  // 推流/录制还在跑的时候 OBS 不让改视频设置：先停掉，再改
+  try {
+    const stream = await obs.call<{ outputActive?: boolean }>('GetStreamStatus');
+    if (stream.outputActive) await obs.call('StopStream').catch(() => undefined);
+  } catch {
+    // 查不到状态就直接试
+  }
+  try {
+    const record = await obs.call<{ outputActive?: boolean }>('GetRecordStatus');
+    if (record.outputActive) await obs.call('StopRecord').catch(() => undefined);
+  } catch {
+    // 没在录
+  }
+  try {
+    await obs.call('SetVideoSettings', { fpsNumerator: 30, fpsDenominator: 1, baseWidth: size.width, baseHeight: size.height, outputWidth: size.width, outputHeight: size.height });
+  } catch (err) {
+    // 有的 OBS 版本输出刚停还没释放，等一下再试一次
+    await new Promise((r) => setTimeout(r, 1500));
+    await obs.call('SetVideoSettings', { fpsNumerator: 30, fpsDenominator: 1, baseWidth: size.width, baseHeight: size.height, outputWidth: size.width, outputHeight: size.height });
+  }
   // 编码器参数在配置文件目录的 streamEncoder.json 里：写好后切走再切回来，让 OBS 重新读
   const dir = profileDir(OBS_NAME);
   if (!dir) throw new Error('找不到 OBS 的 dsh-live-farben 配置文件目录');
@@ -259,8 +299,53 @@ export async function prepareObs(obs: Obs, stageUrl: string, kbps = 4500, qualit
 const GAME_WINDOW = '游戏窗口';
 const GAME_HUD = '游戏 HUD';
 const GAME_AUDIO = '游戏声音';
+/** 查房：别人直播间的画面（OBS 媒体源拉 FLV），摆在视频位，看完就撤 */
+const ROOM_SOURCE = '查房画面';
+const ROOM_AUDIO_DB = -18;
 /** 游戏声音压低一点：她说话、视频声音在前面 */
 const GAME_AUDIO_DB = -14;
+
+/** 只清掉查房画面源（不广播、不报错）：巡检时用 */
+export async function clearRoomStream(obs: Obs): Promise<void> {
+  const { inputs } = await obs.call<{ inputs: Array<{ inputName: string }> }>('GetInputList');
+  if (inputs.some((i) => i.inputName === ROOM_SOURCE)) await obs.call('RemoveInput', { inputName: ROOM_SOURCE });
+}
+
+/**
+ * 查房画面：把别人直播间的 FLV 拉进 OBS，摆在视频位（rect），盖在舞台上，看完就撤。
+ * 声音压到 -18dB，她说话时不会被盖住，也不会当成自己的直播声音。
+ */
+export async function showRoomStream(obs: Obs, url: string | null, rect: { x: number; y: number; w: number; h: number }): Promise<void> {
+  const { inputs } = await obs.call<{ inputs: Array<{ inputName: string }> }>('GetInputList');
+  const has = inputs.some((i) => i.inputName === ROOM_SOURCE);
+  if (!url) {
+    if (has) await obs.call('RemoveInput', { inputName: ROOM_SOURCE });
+    return;
+  }
+  const settings = {
+    input: url,
+    is_local_file: false,
+    close_when_inactive: false,
+    restart_on_activate: false,
+    buffering_mb: 2,
+    speed_percent: 100,
+    // 硬件解码：串门要同时解码对方直播流，软件解码会把她说话的音频抢出卡顿
+    hw_decode: true,
+  };
+  if (has) await obs.call('SetInputSettings', { inputName: ROOM_SOURCE, inputSettings: settings });
+  else await obs.call('CreateInput', { sceneName: SCENE, inputName: ROOM_SOURCE, inputKind: 'ffmpeg_source', inputSettings: settings });
+  await obs.call('SetInputMute', { inputName: ROOM_SOURCE, inputMuted: false }).catch(() => undefined);
+  await obs.call('SetInputVolume', { inputName: ROOM_SOURCE, inputVolumeDb: ROOM_AUDIO_DB }).catch(() => undefined);
+  const { sceneItemId } = await obs.call<{ sceneItemId: number }>('GetSceneItemId', { sceneName: SCENE, sourceName: ROOM_SOURCE });
+  const place = {
+    positionX: rect.x, positionY: rect.y, alignment: 5,
+    boundsType: 'OBS_BOUNDS_SCALE_INNER', boundsWidth: rect.w, boundsHeight: rect.h, boundsAlignment: 0,
+  };
+  await obs.call('SetSceneItemTransform', { sceneName: SCENE, sceneItemId, sceneItemTransform: place });
+  // 盖在舞台上（最上层），不然会被舞台页面挡掉
+  const { sceneItems } = await obs.call<{ sceneItems: Array<{ sceneItemId: number }> }>('GetSceneItemList', { sceneName: SCENE });
+  await obs.call('SetSceneItemIndex', { sceneName: SCENE, sceneItemId, sceneItemIndex: Math.max(0, sceneItems.length - 1) });
+}
 
 /**
  * 她在直播里玩的游戏（窗口画面）上舞台：窗口捕获摆在舞台的游戏位上（rect，画布坐标），
@@ -319,8 +404,16 @@ export async function startStreaming(obs: Obs, addr: string, code: string): Prom
     streamServiceType: 'rtmp_custom',
     streamServiceSettings: { server: addr, key: code, use_auth: false, bwtest: false },
   });
-  const status = await obs.call<{ outputActive: boolean }>('GetStreamStatus');
-  if (!status.outputActive) await obs.call('StartStream');
+  const status = await obs.call<{ outputActive: boolean; outputBytes: number }>('GetStreamStatus');
+  if (status.outputActive) {
+    // 上一次断线后 OBS 可能卡在「重连中」：状态说在推，字节却不动。这种先停掉再重开
+    await sleep(2500);
+    const probe = await obs.call<{ outputBytes: number }>('GetStreamStatus');
+    if (probe.outputBytes > status.outputBytes) return;
+    await obs.call('StopStream').catch(() => {});
+    await sleep(2000);
+  }
+  await obs.call('StartStream');
   // 核显 QSV 首次初始化会花十几秒（实测 12s），等 60 秒
   let active = false;
   for (let i = 0; i < 120; i++) {
@@ -353,7 +446,13 @@ export async function checkObs(obs: Obs, stageUrl: string, kbps?: number): Promi
 
 export async function stopStreaming(obs: Obs): Promise<void> {
   const status = await obs.call<{ outputActive: boolean }>('GetStreamStatus');
-  if (status.outputActive) await obs.call('StopStream');
+  if (!status.outputActive) return;
+  try {
+    await obs.call('StopStream');
+  } catch (err) {
+    // 501 = OBS 那边这个输出其实已经不在跑了（断线后状态残留）：下播照样算成功
+    if (!/501|not running|not started/i.test((err as Error).message)) throw err;
+  }
 }
 
 export interface StreamHealth {

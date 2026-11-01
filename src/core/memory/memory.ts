@@ -86,11 +86,16 @@ export class LiveMemory {
     this.store.touchViewer(platform, uid, cleanName(event.user.name), id, now);
     if (event.kind === 'chat' && !isUpdate && !event.emoteOnly) {
       const text = cleanText(event.text);
-      if (text) this.store.addLine(platform, uid, id, text, now);
+      if (text) {
+        this.store.addLine(platform, uid, id, text, now);
+        this.store.addChat(platform, uid);
+      }
     } else if ((event.kind === 'gift' || event.kind === 'superchat') && !isUpdate && event.valueYuan > 0) {
       this.store.addGift(platform, uid, event.valueYuan);
+      this.store.addAffection(platform, uid, event.valueYuan * 2);
     } else if (event.kind === 'membership') {
       this.store.addGift(platform, uid, event.valueYuan, event.level);
+      this.store.addAffection(platform, uid, 20);
     }
   }
 
@@ -107,6 +112,17 @@ export class LiveMemory {
     if (!viewer) return null;
     if (prev?.isNew) return '第一次来直播间';
     return describeViewer(viewer, prev, now);
+  }
+
+  /** 好感度最高的几位常客（舞台上展示；带称号） */
+  regulars(limit = 5): Array<{ uid: string; name: string; title: string; visits: number; affection: number }> {
+    return this.store.topViewers(limit).map((v) => ({
+      uid: v.uid,
+      name: v.name,
+      visits: v.visits,
+      affection: v.affection,
+      title: titleOf(v.visits, v.affection),
+    }));
   }
 
   /** 这一场推流到直播间了（不是彩排） */
@@ -135,6 +151,15 @@ function ago(ms: number): string {
   return days < 1 ? '今天' : days < 60 ? `${days} 天前` : `${Math.floor(days / 30)} 个月前`;
 }
 
+/** 观众称号：按来访次数和好感度算 */
+export function titleOf(visits: number, affection = 0): string {
+  if (visits >= 50 || affection >= 500) return '家人';
+  if (visits >= 20 || affection >= 200) return '常客';
+  if (visits >= 10 || affection >= 80) return '老朋友';
+  if (visits >= 3 || affection >= 20) return '熟人';
+  return '新朋友';
+}
+
 function describeViewer(v: ViewerRecord, prev: Previous | undefined, now: number): string | null {
   const parts: string[] = [];
   const visits = v.visits;
@@ -142,7 +167,7 @@ function describeViewer(v: ViewerRecord, prev: Previous | undefined, now: number
   const longAgo = now - lastSeen > FORGET_AFTER_MS;
   if (visits >= 2) {
     const days = Math.floor((now - lastSeen) / DAY);
-    parts.push(`老观众，第 ${visits} 次来${days >= 1 ? `（上次是 ${days} 天前）` : ''}`);
+    parts.push(`${titleOf(visits)}，第 ${visits} 次来${days >= 1 ? `（上次是 ${days} 天前）` : ''}`);
   }
   if (v.names.length > 1) parts.push(`以前叫「${v.names[v.names.length - 2]}」`);
   if (GUARD[v.guardLevel]) parts.push(`上过${GUARD[v.guardLevel]}`);

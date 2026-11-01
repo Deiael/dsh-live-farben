@@ -51,11 +51,20 @@ function Halo() {
 // ── 角色 ─────────────────────────────────────────────
 
 export function Character() {
-  const { character } = useStage();
+  const { character, hide } = useStage();
   if (!character) return null;
-  if (character.renderer === 'clips' && character.clips) return <ClipCharacter character={character} />;
-  if (character.renderer === 'image' && character.image) return <ImageCharacter character={character} />;
-  return null;
+  const phase = hide?.phase;
+  const cls = phase === 'hide' ? 'ls-char-wrap ls-vanished' : phase === 'reveal' ? 'ls-char-wrap ls-appeared' : 'ls-char-wrap';
+  const inner =
+    character.renderer === 'clips' && character.clips ? <ClipCharacter character={character} />
+      : character.renderer === 'image' && character.image ? <ImageCharacter character={character} />
+        : null;
+  return (
+    <div className={cls}>
+      {inner}
+      <i className="ls-smoke" />
+    </div>
+  );
 }
 
 /**
@@ -70,6 +79,20 @@ function ClipCharacter({ character }: { character: CharacterManifest }) {
   const line = said?.speaker ? null : said;
   const [queue, setQueue] = useState<string[]>([clips.idle]);
   const lineId = line?.id ?? null;
+
+  // 待机时偶尔来个小动作（笑、害羞、歪头、吓一跳……）：不然一直同一个循环太单调
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (line) return;
+      if (queue.length !== 1 || queue[0] !== clips.idle) return;
+      const moods = Object.values(clips.moods ?? {});
+      if (!moods.length) return;
+      if (Math.random() > 0.75) return;
+      const clip = moods[Math.floor(Math.random() * moods.length)];
+      setQueue([clip, clips.idle]);
+    }, 5_000);
+    return () => clearInterval(timer);
+  }, [queue.join('|')]);
 
   // 对直播间里的事做个反应（角色包 reactions）：和说话时的表情走同一条路，最后回到待机；说着话就不打断
   useEffect(() => {
@@ -578,7 +601,7 @@ export function Orders({ options }: { options?: Record<string, unknown> }) {
  * options：title（头上的字，默认「点播排队」）、how（没人排队时显示）、seconds（每条停几秒，默认 6）
  */
 export function Queue({ options }: { options?: Record<string, unknown> }) {
-  const { queue } = useStage();
+  const { queue, visit } = useStage();
   const title = String(options?.title ?? '点播排队');
   const how = String(options?.how ?? '弹幕说「想看……」就排上');
   const seconds = Number(options?.seconds ?? 6);
@@ -589,10 +612,18 @@ export function Queue({ options }: { options?: Record<string, unknown> }) {
     const timer = setInterval(() => setPage((p) => (p + 1) % queue.length), seconds * 1000);
     return () => clearInterval(timer);
   }, [queue.length, seconds]);
+  const visitLine = visit ? (
+    <div className="ls-queue-visit">
+      <b>串门中</b>
+      <span>{visit.title}</span>
+      <small>房间 {visit.room}</small>
+    </div>
+  ) : null;
   if (!queue.length) {
     return (
       <div className="ls-board ls-queue">
         <div className="ls-board-head"><span>{title}</span></div>
+        {visitLine}
         <div className="ls-orders-empty">{how}</div>
       </div>
     );
@@ -602,12 +633,206 @@ export function Queue({ options }: { options?: Record<string, unknown> }) {
   return (
     <div className="ls-board ls-queue">
       <div className="ls-board-head"><span>{title}</span><em>{queue.length} 个在排</em></div>
+      {visitLine}
       <div className="ls-board-page" key={`${item.id}-${at}`}>
-        <div className="ls-board-title">{item.playing ? '正在放' : `排队第 ${at + 1} 位`}</div>
-        <ul><li>{item.title}</li></ul>
-        <small>点播：{item.who}</small>
+        <div className="ls-board-title">{item.playing ? (item.kind === 'song' ? '正在唱' : '正在放') : `${item.kind === 'song' ? '点歌' : '点播'} 第 ${at + 1} 位`}</div>
+        <ul><li>{item.kind === 'song' ? '♪ ' : ''}{item.title}</li></ul>
+        <small>{item.kind === 'song' ? '点歌' : '点播'}：{item.who}</small>
       </div>
       {queue.length > 1 && <div className="ls-board-dots">{queue.map((it, i) => <i key={it.id} className={i === at ? 'ls-on' : ''} />)}</div>}
+    </div>
+  );
+}
+
+// ── 常客榜 ───────────────────────────────────────────
+
+/** 好感度最高的几位老观众：她记得你、叫得出称号 */
+export function Regulars({ options }: { options?: Record<string, unknown> }) {
+  const { regulars } = useStage();
+  const title = String(options?.title ?? '常客');
+  const rows = Number(options?.rows ?? 5);
+  return (
+    <div className="ls-board ls-regulars">
+      <div className="ls-board-head"><span>{title}</span><em>{regulars.length} 位</em></div>
+      {regulars.length === 0
+        ? <div className="ls-orders-empty">还没有常客</div>
+        : (
+          <ul className="ls-regulars-list">
+            {regulars.slice(0, rows).map((r, i) => (
+              <li key={r.uid}>
+                <span className="ls-regulars-rank">{i + 1}</span>
+                <b>{r.name}</b>
+                <em>{r.title}</em>
+                <small>{r.visits} 次</small>
+              </li>
+            ))}
+          </ul>
+        )}
+    </div>
+  );
+}
+
+// ── 共创连续剧 ───────────────────────────────────────
+
+/** 观众投票决定剧情：显示章节、问题、两个选项和票数 */
+export function Story({ options }: { options?: Record<string, unknown> }) {
+  const { story } = useStage();
+  if (!story) return null;
+  const total = Math.max(1, story.votesA + story.votesB);
+  return (
+    <div className="ls-board ls-story">
+      <div className="ls-board-head"><span>第 {story.chapter} 章</span><em>{story.title}</em></div>
+      <div className="ls-story-q">{story.question}</div>
+      <ul className="ls-story-options">
+        <li>
+          <b>1</b><span>{story.a}</span><small>{story.votesA} 票</small>
+          <i style={{ width: `${(story.votesA / total) * 100}%` }} />
+        </li>
+        <li>
+          <b>2</b><span>{story.b}</span><small>{story.votesB} 票</small>
+          <i style={{ width: `${(story.votesB / total) * 100}%` }} />
+        </li>
+      </ul>
+      <div className="ls-story-hint">{story.chosen ? '这一章已经定下来了' : '弹幕发 1 或 2 投票'}</div>
+    </div>
+  );
+}
+
+// ── 礼物榜（本日 / 本月）─────────────────────────────
+
+export function GiftPanel() {
+  const { gifts } = useStage();
+  const [tab, setTab] = useState<'today' | 'month'>('today');
+  useEffect(() => {
+    const timer = setInterval(() => setTab((t) => (t === 'today' ? 'month' : 'today')), 8000);
+    return () => clearInterval(timer);
+  }, []);
+  const data = gifts ?? { today: [], month: [] };
+  const list = tab === 'today' ? data.today : data.month;
+  const total = list.reduce((n, p) => n + p.total, 0);
+  return (
+    <div className="ls-board ls-gifts ls-compact">
+      <div className="ls-board-head">
+        <span>礼物榜</span>
+        <div className="ls-gifts-tabs">
+          <i className={tab === 'today' ? 'ls-on' : ''}>本日</i>
+          <i className={tab === 'month' ? 'ls-on' : ''}>本月</i>
+        </div>
+      </div>
+      {list.length === 0 ? (
+        <div className="ls-orders-empty">{tab === 'today' ? '今天还没人送礼物' : '这个月还没人送礼物'}</div>
+      ) : (
+        <>
+          <ul className="ls-gifts-list">
+            {list.slice(0, 5).map((p, i) => (
+              <li key={p.name} className={i === 0 ? 'ls-top1' : i === 1 ? 'ls-top2' : i === 2 ? 'ls-top3' : ''}>
+                <b>{i + 1}</b>
+                <div>
+                  <span className="ls-gifts-name">{p.name}</span>
+                  <small>{p.gifts.map((g) => g.gift + '×' + g.count).join('、')}</small>
+                </div>
+                <em>{p.total.toFixed(0)}</em>
+              </li>
+            ))}
+          </ul>
+          <div className="ls-gifts-foot">
+            <span>{tab === 'today' ? '本日' : '本月'}共 {list.length} 人</span>
+            <b>{total.toFixed(0)} 元</b>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── 串门倒计时（挂在大肥鱼头顶）─────────────────────────
+
+/** 串门剩余时间：3 分钟倒数，到点自动收起、接着放排队的点播 */
+export function VisitCountdown() {
+  const { visit } = useStage();
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [visit?.until]);
+  if (!visit) return null;
+  const left = Math.max(0, Math.ceil((visit.until - now) / 1000));
+  if (left <= 0) return null;
+  const mm = Math.floor(left / 60);
+  const ss = String(left % 60).padStart(2, '0');
+  return (
+    <div className="ls-visit-count">
+      <b>串门</b>
+      <span>{mm}:{ss}</span>
+      <i style={{ width: `${Math.min(100, (left / 180) * 100)}%` }} />
+    </div>
+  );
+}
+
+// ── 小钢炮（维修工）────────────────────────────────────
+
+/** 右上角的小钢炮：头像 + 它最近说的话（没说过话也露个脸，观众才知道它在线） */
+export function RepairPanel({ options }: { options?: Record<string, unknown> }) {
+  const { repair } = useStage();
+  const last = repair?.messages[repair.messages.length - 1];
+  const busy = !!repair?.busy;
+  const avatar = assetUrl('characters', 'xiaogangpao', 'art/portrait.png');
+  return (
+    <div className="ls-repair">
+      <img className="ls-repair-avatar" src={avatar} alt="" />
+      <div className="ls-repair-body">
+        <div className="ls-repair-name">
+          小钢炮
+          <em className={busy ? 'ls-repair-busy' : ''}>{busy ? '检修中' : '待机'}</em>
+        </div>
+        <div className="ls-repair-bubble">{last?.text ?? '有东西要修就 @ 我。'}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── 通用投票 ─────────────────────────────────────────
+
+/** 开播主题 / 选书 / 继续·换章·讨论：问题 + 选项 + 票数 + 倒计时 */
+export function PollPanel({ options }: { options?: Record<string, unknown> }) {
+  const { poll } = useStage();
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, []);
+  if (!poll) return null;
+  const left = poll.done ? 0 : Math.max(0, Math.ceil((poll.endsAt - now) / 1000));
+  const total = Math.max(1, poll.votes.reduce((a, b) => a + b, 0));
+  return (
+    <div className="ls-board ls-poll">
+      <div className="ls-board-head"><span>{poll.done ? '投票结果' : '投票中'}</span><em>{poll.done ? '已结束' : `${left}s`}</em></div>
+      <div className="ls-poll-q">{poll.question}</div>
+      <ul className="ls-poll-options">
+        {poll.options.map((option, i) => (
+          <li key={option}>
+            <b>{i + 1}</b><span>{option}</span><small>{poll.votes[i]} 票</small>
+            <i style={{ width: `${(poll.votes[i] / total) * 100}%` }} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ── 读书会 ───────────────────────────────────────────
+
+/** 书架上的书和朗读进度 */
+export function BookPanel({ options }: { options?: Record<string, unknown> }) {
+  const { book } = useStage();
+  if (!book) return null;
+  const pct = Math.max(0, Math.min(100, Math.round((book.para / Math.max(1, book.paragraphs)) * 100)));
+  return (
+    <div className="ls-board ls-book">
+      <div className="ls-board-head"><span>{book.title}</span><em>{book.chapter + 1}/{book.total} 章</em></div>
+      <div className="ls-book-chapter">{book.chapterTitle}</div>
+      <div className="ls-book-bar"><i style={{ width: `${pct}%` }} /></div>
+      <div className="ls-book-text">{book.text}</div>
     </div>
   );
 }
@@ -807,9 +1032,9 @@ export function Rice({ options }: { options?: Record<string, unknown> }) {
       {art && <ArtImg className="ls-rice-art" src={art} />}
       <div className="ls-rice-body">
         <div className="ls-rice-label">今天吃了</div>
-        <div className="ls-rice-count"><b key={grains}>{grains.toLocaleString()}</b><span>粒米</span>{added > 0 && <em key={tokens}>+{Math.max(1, grainsOf(added))}</em>}</div>
+        <div className="ls-rice-count"><b key={grains}>{grains.toLocaleString()}</b><span>粒米</span>{added > 0 && <em key={`+${tokens}`}>+{Math.max(1, grainsOf(added))}</em>}</div>
         <div className="ls-rice-bowl" title={`第 ${bowls + 1} 碗`}><i style={{ width: `${((grains % perBowl) / perBowl) * 100}%` }} /><span>第 {bowls + 1} 碗</span></div>
-        <div className="ls-rice-note">{tokens.toLocaleString()} token ≈ {energy(joules)}电</div>
+        <div className="ls-rice-note">≈ {energy(joules)}电</div>
       </div>
     </div>
   );
@@ -998,10 +1223,78 @@ const CATCHUP_SEC = 3;
  * 她在放的视频（只出现在模板的 video 布局里）。她说话时声音调小，放到 until 秒或放完回执给身体。
  * options：duck（她说话时的音量，默认 0.25）、caption（顶上写片名，默认开）
  */
+/** LRC 歌词 → [{ at 秒, text }] */
+function lrcLines(text?: string): Array<{ at: number; text: string }> {
+  if (!text) return [];
+  const out: Array<{ at: number; text: string }> = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const m = /^\[(\d{1,2}):(\d{2}(?:\.\d{1,3})?)\](.*)$/.exec(raw.trim());
+    if (!m) continue;
+    const words = m[3].trim();
+    if (words) out.push({ at: Number(m[1]) * 60 + Number(m[2]), text: words });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
 export function Video({ options }: { options?: Record<string, unknown> }) {
-  const { media, line } = useStage();
+  const { media, line, book } = useStage();
   const ref = useRef<HTMLVideoElement>(null);
   const speaking = !!line;
+  const [now, setNow] = useState(0);
+  const lyrics = useMemo(() => lrcLines(media?.lyrics), [media?.id]);
+  let lyricIndex = -1;
+  for (let k = 0; k < lyrics.length; k++) if (lyrics[k].at <= now + 0.25) lyricIndex = k;
+
+  // 读书会模式下视频只是被藏起来：不暂停的话声音会和她念书叠在一起
+  useEffect(() => {
+    if (book) ref.current?.pause();
+  }, [book?.id, book?.chapter, book?.para]);
+
+  // 看门狗：画面卡住 / 被暂停 / 播完了，都上报，让直播间跳到下一个，别一直定格
+  useEffect(() => {
+    const video = ref.current;
+    if (!video || !media || media.kind === 'audio') return;
+    let last = -1;
+    let still = 0;
+    let triedPlay = false;
+    let reported = false;
+    const timer = setInterval(() => {
+      if (!video || reported) return;
+      // 还在加载/缓冲（没有可播数据）：交给直播间的超时兜底，别当成“卡住”提前毙掉
+      if (video.readyState < 3) {
+        last = video.currentTime;
+        still = 0;
+        return;
+      }
+      if (video.ended) {
+        reported = true;
+        reportMedia(media.id, 'ended', video.currentTime, '播完了');
+        return;
+      }
+      if (video.paused) {
+        // 先试着拉起来一次；还停着就是真卡住了
+        if (!triedPlay) {
+          triedPlay = true;
+          still = 0;
+          last = -1;
+          void video.play().catch(() => undefined);
+          return;
+        }
+        still += 1;
+      } else if (Math.abs(video.currentTime - last) < 0.01) {
+        still += 1;
+      } else {
+        still = 0;
+      }
+      last = video.currentTime;
+      // 4 个周期（8 秒）都不动才算卡住，给慢机器和刚起播留余量
+      if (still >= 4) {
+        reported = true;
+        reportMedia(media.id, 'error', video.currentTime, '画面卡住了');
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [media?.id]);
 
   useEffect(() => {
     const video = ref.current;
@@ -1030,7 +1323,7 @@ export function Video({ options }: { options?: Record<string, unknown> }) {
       started = true;
       reportMedia(media.id, 'playing', video.currentTime);
     };
-    const onTime = () => { if (video.currentTime >= media.until) finish('ended'); };
+    const onTime = () => { setNow(video.currentTime); if (video.currentTime >= media.until) finish('ended'); };
     const onEnded = () => finish('ended');
     // MediaError：1 中止、2 网络、3 解码、4 格式不支持或地址打不开
     const onError = () => finish('error', `MediaError ${video.error?.code}: ${video.error?.message ?? ''}`);
@@ -1067,8 +1360,14 @@ export function Video({ options }: { options?: Record<string, unknown> }) {
   }, [speaking, media?.id]);
 
   return (
-    <div className={`ls-video${media ? '' : ' ls-empty'}`}>
+    <div className={`ls-video${media ? '' : ' ls-empty'}${media?.kind === 'audio' ? ' ls-audio' : ''}`}>
       <video ref={ref} playsInline preload="auto" />
+      {media?.kind === 'audio' && (
+        <div className="ls-lyrics">
+          <div className="ls-lyrics-now">{lyrics[lyricIndex]?.text ?? ''}</div>
+          <div className="ls-lyrics-next">{lyrics[lyricIndex + 1]?.text ?? ''}</div>
+        </div>
+      )}
       {media && options?.caption !== false && (
         <div className="ls-video-caption"><b>{media.title}</b><span>{media.up}</span></div>
       )}

@@ -7,9 +7,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { arrange, type Mode, type Slot } from './layout';
 import type { WidgetType } from './protocol';
-import { assetUrl, connect, preview, unlockAudio } from './store';
+import { assetUrl, connect, mediaUrl, preview, unlockAudio } from './store';
 import { Effects } from './effects';
-import { AiLabel, Alerts, Board, Character, Chat, Game, Notice, Orders, Queue, Reply, Rice, Scene, Status, Subtitle, SUBTITLE_LINGER_MS, Terminal, useLinger, useStage, Video } from './widgets';
+import { AiLabel, Alerts, Board, Character, Chat, Game, Notice, Orders, Queue, Regulars, BookPanel, PollPanel, RepairPanel, VisitCountdown, GiftPanel, Reply, Rice, Scene, Status, Story, Subtitle, SUBTITLE_LINGER_MS, Terminal, useLinger, useStage, Video } from './widgets';
 
 const WIDGETS: Record<WidgetType, React.ComponentType<{ options?: Record<string, unknown> }>> = {
   character: Character,
@@ -28,6 +28,13 @@ const WIDGETS: Record<WidgetType, React.ComponentType<{ options?: Record<string,
   game: Game,
   orders: Orders,
   queue: Queue,
+  regulars: Regulars,
+  story: Story,
+  book: BookPanel,
+  poll: PollPanel,
+  repair: RepairPanel,
+  visit: VisitCountdown,
+  gifts: GiftPanel,
 };
 
 function useViewport(): { width: number; height: number } {
@@ -68,9 +75,9 @@ function holePath(s: Slot, cw: number, ch: number): string {
 }
 
 function App() {
-  const { template, needsClick, media, game, line } = useStage();
-  // 玩游戏的时候放视频：视频照放（游戏画面让给视频）
-  const mode: Mode = media ? 'video' : game ? 'game' : 'chat';
+  const { template, needsClick, media, game, line, prefetch, scene, book } = useStage();
+  // 玩游戏的时候放视频：视频照放（游戏画面让给视频）；读书会优先，中间显示书页
+  const mode: Mode = book ? 'read' : media ? 'video' : game ? 'game' : 'chat';
   const slots = useMemo(() => (template ? arrange(template, mode) : []), [template, mode]);
   // 字幕和终端摆在同一块（看视频、玩游戏的布局）：她说话时（和字幕退场那一会儿）只露字幕，说完换回终端
   const [speaking] = useLinger(line, SUBTITLE_LINGER_MS);
@@ -106,11 +113,16 @@ function App() {
         style={{ width: cw, height: ch, transform: `scale(${scale})`, left: (width - cw * scale) / 2, top: (height - ch * scale) / 2, ...template.theme } as React.CSSProperties}
       >
         {/* 背景和前景各几层空的 div：模板拿它们（和各自的 ::before / ::after）画光、气泡、云……，挂件在中间 */}
-        <div className="ls-backdrop" style={hole}><i className="ls-layer ls-layer-1" /><i className="ls-layer ls-layer-2" /><i className="ls-layer ls-layer-3" /></div>
+        <div className="ls-backdrop" style={hole}>
+          {scene && <img className="ls-scene-img" src={mediaUrl(scene)} alt="" />}
+          <i className="ls-layer ls-layer-1" /><i className="ls-layer ls-layer-2" /><i className="ls-layer ls-layer-3" />
+        </div>
         {slots.map((p) => <Placed key={p.key} p={p} covered={!!speaking && sharesSubtitle(p)} />)}
         <div className="ls-overlay" style={hole}><i className="ls-layer ls-layer-1" /><i className="ls-layer ls-layer-2" /></div>
         <Notice />
       </div>
+      {/* 下一条点播先在后台缓冲好：轮到它时几乎立刻出画面 */}
+      {prefetch && <video key={prefetch.id} className="ls-preload" src={mediaUrl(prefetch.src)} preload="auto" muted playsInline />}
       {needsClick && !preview && (
         <button className="ls-unlock" onClick={unlockAudio}>点一下这里开启声音（OBS 的浏览器源不需要）</button>
       )}

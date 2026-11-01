@@ -1,23 +1,15 @@
 {
   "name": "dsh-live-farben",
-  "version": "0.1.0",
-  "description": "Let your DeepSeek Harness agent go live on Bilibili: reads chat, thanks gifts, welcomes viewers, remembers regulars, queues viewer-requested videos on stage, and speaks with its own TTS voice through OBS.",
+  "version": "0.0.1",
+  "description": "Let your DeepSeek Harness agent go live on Bilibili: reads the room, thanks gifts, welcomes viewers, remembers regulars, and talks with its own voice on a stage you can skin.",
   "type": "module",
   "license": "MIT",
-  "author": "Deiael",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Deiael/dsh-live-farben.git"
-  },
-  "homepage": "https://github.com/Deiael/dsh-live-farben#readme",
-  "bugs": {
-    "url": "https://github.com/Deiael/dsh-live-farben/issues"
-  },
   "exports": {
     ".": "./lib/index.js",
     "./agent": "./lib/agent.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./repair": "./lib/repair.js"
   },
   "main": "./lib/index.js",
   "files": [
@@ -26,8 +18,7 @@
     "assets",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE",
-    "NOTICE"
+    "LICENSE"
   ],
   "keywords": [
     "deepseek",
@@ -36,9 +27,7 @@
     "dsh-plugin",
     "livestream",
     "bilibili",
-    "vtuber",
-    "obs",
-    "tts"
+    "vtuber"
   ],
   "dsh": {
     "bundle": {

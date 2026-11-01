@@ -3,7 +3,7 @@
  * 唯一往回发的是「这句念完了」（出声的页面才发；预览页静音、不回执）。
  */
 
-import type { BrainState, CharacterManifest, GameSource, GameStatus, StageEvent, StageLiveEvent, StageOrder, StageQueueItem, StageUser, TemplateManifest } from './protocol';
+import type { BrainState, CharacterManifest, GameSource, GameStatus, StageEvent, StageLiveEvent, StageOrder, StageQueueItem, StageBook, StagePoll, StageRegular, StageStory, StageUser, RepairMessage, StageVisit, StageGiftPerson, TemplateManifest } from './protocol';
 import { type FxEvent, giftTier, pick, triggersOf } from './triggers';
 
 export interface ChatRow {
@@ -42,6 +42,8 @@ export interface Media {
   from: number;
   until: number;
   at: number;
+  kind?: 'video' | 'audio';
+  lyrics?: string;
 }
 
 export interface Line {
@@ -142,6 +144,24 @@ export interface StageState {
   orders: StageOrder[];
   /** 点播排队（排着等放的视频，舞台上一页一条轮播） */
   queue: StageQueueItem[];
+  /** 常客榜（好感度最高的几位老观众） */
+  regulars: StageRegular[];
+  /** 共创连续剧：这一章（没开剧情就是 null） */
+  story: StageStory | null;
+  /** 剧情场景图（null = 用模板默认背景） */
+  scene: string | null;
+  /** 读书会：正在读的书（null = 没在读） */
+  book: StageBook | null;
+  /** 通用投票（null = 没有投票） */
+  poll: StagePoll | null;
+  /** 小钢炮的对话气泡（null = 没说过话） */
+  repair: { messages: RepairMessage[]; busy: boolean } | null;
+  /** 查房：正在串门的直播间（null = 没在串门） */
+  visit: StageVisit | null;
+  /** 捉迷藏：hide = 影遁消失中，reveal = 刚出现 */
+  hide: { phase: 'hide' | 'reveal' } | null;
+  /** 礼物榜（null = 还没收到礼物） */
+  gifts: { today: StageGiftPerson[]; month: StageGiftPerson[] } | null;
   /** 滚动通知（画面最底下），空串不显示 */
   notice: string;
   /** 她在直播里玩的游戏的画面来源：舞台换成 game 布局 */
@@ -209,7 +229,7 @@ function startUpdating(): void {
 let state: StageState = {
   connected: false, character: null, template: null, brain: 'off', brainDetail: '', line: null, lineEndedAt: 0,
   chats: [], alerts: [], focus: new Set(), reply: [], replySeq: 0, onAir: false, needsClick: false,
-  phase: wasUpdating() ? 'updating' : 'waiting', stats: freshStats(), tokens: 0, model: '', term: [], media: null, board: '', orders: [], queue: [], notice: '', game: null, gameStatus: null, fx: [], reaction: null,
+  phase: wasUpdating() ? 'updating' : 'waiting', stats: freshStats(), tokens: 0, model: '', term: [], media: null, board: '', orders: [], queue: [], regulars: [], story: null, scene: null, book: null, poll: null, repair: null, visit: null, hide: null, gifts: null, notice: '', game: null, gameStatus: null, fx: [], reaction: null,
 };
 const subscribers = new Set<() => void>();
 
@@ -263,6 +283,8 @@ function onSay(event: Extract<StageEvent, { type: 'say' }>): void {
   };
   if (!event.audio || preview) return fallback();
   const player = new Audio(`data:audio/mpeg;base64,${event.audio}`);
+  // 有人在放视频/歌曲时把她的人声压低一点，不然听不见原声；没人放时正常音量
+  player.volume = getState().media ? 0.7 : 1;
   audio = player;
   audioLine = event.id;
   player.onloadedmetadata = () => begin(Number.isFinite(player.duration) ? player.duration * 1000 : event.estimateMs);
@@ -329,8 +351,10 @@ export function riceOf(tokens: number, options?: Record<string, unknown>) {
   const jPerToken = Number(options?.jPerToken ?? 1);
   const bowlJ = Number(options?.bowlKcal ?? 230) * 4184;
   const perBowl = Number(options?.grainsPerBowl ?? 3000);
+  // 400 token = 1 粒米
+  const perGrain = Math.max(1, Number(options?.tokensPerGrain ?? 400));
   const joules = tokens * jPerToken;
-  return { joules, perBowl, grains: Math.floor((joules / bowlJ) * perBowl), grainsOf: (t: number) => Math.round(((t * jPerToken) / bowlJ) * perBowl) };
+  return { joules, perBowl, grains: Math.floor(tokens / perGrain), grainsOf: (t: number) => Math.round(t / perGrain) };
 }
 
 /** 电能：焦、千焦、兆焦 */
@@ -522,14 +546,23 @@ function handle(event: StageEvent): void {
       });
     case 'media':
       if (event.action === 'play') {
-        const { id, title, up, src, from, until, at } = event;
-        return update((s) => term({ ...s, media: { id, title, up, src, from, until, at } }, 'video', `放视频：${short(title, 24)}`));
+        const { id, title, up, src, from, until, at, kind, lyrics } = event;
+        return update((s) => term({ ...s, media: { id, title, up, src, from, until, at, kind, lyrics } }, 'video', `放视频：${short(title, 24)}`));
       }
       return update((s) => (s.media?.id === event.id ? { ...s, media: null } : s));
     case 'reload': location.reload(); return;
     case 'board': return update((s) => ({ ...s, board: event.text }));
     case 'orders': return update((s) => ({ ...s, orders: event.items }));
     case 'queue': return update((s) => ({ ...s, queue: event.items }));
+    case 'regulars': return update((s) => ({ ...s, regulars: event.items }));
+    case 'story': return update((s) => ({ ...s, story: event.story }));
+    case 'scene': return update((s) => ({ ...s, scene: event.src }));
+    case 'book': return update((s) => ({ ...s, book: event.book }));
+    case 'poll': return update((s) => ({ ...s, poll: event.poll }));
+    case 'repair': return update((s) => ({ ...s, repair: { messages: event.messages, busy: event.busy } }));
+    case 'visit': return update((s) => ({ ...s, visit: event.visit }));
+    case 'gifts': return update((s) => ({ ...s, gifts: { today: event.today, month: event.month } }));
+    case 'hide': return update((s) => ({ ...s, hide: event.phase === 'end' ? null : { phase: event.phase } }));
     case 'notice': return update((s) => ({ ...s, notice: event.text }));
     case 'game': return update((s) => ({ ...s, game: event.source, ...(event.source ? {} : { gameStatus: null }) }));
     case 'gameStatus': return update((s) => ({ ...s, gameStatus: event.status }));

@@ -107,16 +107,83 @@
       "y": 0,
       "w": 1920,
       "h": 1080
+    },
+    {
+      "type": "book",
+      "hidden": true,
+      "x": 490,
+      "y": 90,
+      "w": 1170,
+      "h": 620,
+      "options": {}
+    },
+    {
+      "type": "poll",
+      "hidden": true,
+      "x": 520,
+      "y": 120,
+      "w": 880,
+      "h": 440,
+      "options": {}
+    },
+    {
+      "type": "repair",
+      "x": 1668,
+      "y": 112,
+      "w": 244,
+      "h": 206,
+      "options": {}
+    },
+    {
+      "type": "visit",
+      "x": 960,
+      "y": 26,
+      "w": 300,
+      "h": 60,
+      "options": {}
+    },
+    {
+      "type": "gifts",
+      "x": 1662,
+      "y": 304,
+      "w": 252,
+      "h": 336,
+      "options": {}
     }
   ],
   "layouts": {
     "video": [
       {
+        "type": "board",
+        "hidden": true
+      },
+      {
+        "type": "queue",
+        "x": 40,
+        "y": 112,
+        "w": 420,
+        "h": 210
+      },
+      {
+        "type": "regulars",
+        "x": 40,
+        "y": 330,
+        "w": 420,
+        "h": 150,
+        "options": {
+          "rows": 3,
+          "title": "常客"
+        }
+      },
+      {
         "type": "video",
         "x": 490,
         "y": 112,
         "w": 1170,
-        "h": 658
+        "h": 658,
+        "options": {
+          "duck": 0.35
+        }
       },
       {
         "type": "subtitle",
@@ -151,6 +218,10 @@
     "game": [
       {
         "type": "board",
+        "hidden": true
+      },
+      {
+        "type": "queue",
         "hidden": true
       },
       {
@@ -208,6 +279,48 @@
       {
         "type": "rice",
         "hidden": true
+      }
+    ],
+    "read": [
+      {
+        "type": "board",
+        "hidden": true
+      },
+      {
+        "type": "queue",
+        "hidden": true
+      },
+      {
+        "type": "rice",
+        "hidden": true
+      },
+      {
+        "type": "terminal",
+        "hidden": true
+      },
+      {
+        "type": "video",
+        "hidden": true
+      },
+      {
+        "type": "book",
+        "x": 470,
+        "y": 70,
+        "w": 1210,
+        "h": 640
+      },
+      {
+        "type": "subtitle",
+        "x": 470,
+        "y": 730,
+        "w": 1210,
+        "h": 280
+      },
+      {
+        "type": "character",
+        "x": 1660,
+        "y": 640,
+        "scale": 0.4
       }
     ]
   }

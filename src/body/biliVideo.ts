@@ -131,6 +131,8 @@ export class BiliVideos {
   private sessionAt = 0;
   private sessionCookie = '';
   private tail: Promise<unknown> = Promise.resolve();
+  /** 解析好的播放地址：点播时提前取好，轮到它就直接用（B 站地址大约 2 小时有效，这里 30 分钟保守） */
+  private urlCache = new Map<string, { at: number; url: string }>();
 
   constructor(private readonly cookie: () => Promise<string>) {}
 
@@ -286,15 +288,22 @@ export class BiliVideos {
     }
   }
 
-  /** 一个完整 MP4 的地址（html5 播放器用的那种，最高 720p） */
+  /** 一个完整 MP4 的地址（html5 播放器用的那种，最高 720p）；解析过的直接给，点播排队时不用再等 */
   async playUrl(bvid: string, cid: number): Promise<string | null> {
+    const key = `${bvid}:${cid}`;
+    const cached = this.urlCache.get(key);
+    if (cached && Date.now() - cached.at < 30 * 60_000) return cached.url;
     const body = await this.get<{ durl?: Array<{ url?: string; backup_url?: string[] | null }> }>(await this.signed('https://api.bilibili.com/x/player/wbi/playurl', {
       bvid, cid, qn: 64, fnval: 1, platform: 'html5', high_quality: 1,
     }));
     const d = body?.code === 0 ? body.data?.durl?.[0] : undefined;
     // 有的视频 B 站给了地址、CDN 上却没有网页版文件（404，2026-10 实测）：先探一下，主地址不通试备用的
     for (const url of [d?.url, ...(d?.backup_url ?? [])].filter((u): u is string => !!u)) {
-      if (await this.reachable(url)) return url;
+      if (await this.reachable(url)) {
+        this.urlCache.set(key, { at: Date.now(), url });
+        if (this.urlCache.size > 60) this.urlCache.delete(this.urlCache.keys().next().value!);
+        return url;
+      }
     }
     return null;
   }

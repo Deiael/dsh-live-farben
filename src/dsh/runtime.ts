@@ -13,6 +13,10 @@ import { homedir } from 'node:os';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LiveShow, type LiveSnapshot } from '../body/show';
+import { listSongs, matchSong, songRequest } from '../body/songLibrary';
+import { listBooks, loadBook } from '../body/books';
+import { GiftBoard } from '../body/giftBoard';
+import type { PlayRequest } from '../body/player';
 import { Whisper } from '../body/asr';
 import { BiliAccount } from '../body/biliAccount';
 import { BiliVideos } from '../body/biliVideo';
@@ -27,8 +31,8 @@ import { canSpeak, subtitleTimeline, synthesize, type TtsAuth } from '../body/tt
 import { DEFAULT_VOICE } from '../body/voices';
 import type { DistillLlm } from '../core/memory/distill';
 import type { CharacterManifest, GameSource } from '../stage/protocol';
-import { gameRect } from '../stage/layout';
-import { connectObs, showGameSources } from '../body/obs';
+import { gameRect, videoRect } from '../stage/layout';
+import { clearRoomStream, connectObs, showGameSources, showRoomStream } from '../body/obs';
 import type { OwnerPace } from '../core/attention/attention';
 
 export interface Settings {
@@ -45,6 +49,26 @@ export interface Settings {
   idleAfterSec: number;
   /** 她在玩游戏时，弹幕至少隔多少秒推给她一次（越大回得越少、玩得越多） */
   gameChatGapSec: number;
+  /** 每隔多少秒顺口提醒观众点赞/关注（0 = 不提醒） */
+  plugEverySec: number;
+  /** 下播后把直播日记发到 B 站动态 */
+  diaryToDynamic: boolean;
+  /** 读书会总开关（现在关掉：不影响点播） */
+  bookMode: boolean;
+  /** 现在的人设：甜妹 / 御姐 / 毒舌 */
+  persona: 'sweet' | 'cool' | 'sassy';
+  /** 深夜电台模式：语速慢、轻声、多读观众来信 */
+  radioMode: boolean;
+  /** 礼物满多少元，她要说句特别的 */
+  unlockYuan: number;
+  /** 没人点播时自动放「冬冰 · AI中转站公寓」合集（有人点播优先） */
+  autoPlay: boolean;
+  /** 合集里任意一集的 BV 号（用它的页面读出整个合集的分集） */
+  autoSeasonBv: string;
+  /** 每天几点自动下播（HH:MM；空 = 不自动下播） */
+  offAt: string;
+  /** 自动下播前，多久没人点播才算「没人点」（分钟） */
+  offQuietMin: number;
   /** 主人说是自己的直播间（记住常来的观众）；别的房间只旁观、不建档 */
   ownRooms: number[];
   /** 开播时真的推流到 B 站（默认关：只在本地彩排） */
@@ -164,6 +188,16 @@ function loadSettings(): Settings {
     distillModel: 'deepseek-official/deepseek-flash',
     idleAfterSec: 45,
     gameChatGapSec: 15,
+    plugEverySec: 600,
+    diaryToDynamic: false,
+    bookMode: false,
+    persona: 'sweet',
+    radioMode: false,
+    unlockYuan: 30,
+    autoPlay: true,
+    autoSeasonBv: 'BV1SBsf6mE3t',
+    offAt: '04:00',
+    offQuietMin: 20,
     ownRooms: [],
     broadcast: false,
     areaId: null,
@@ -225,6 +259,9 @@ async function ttsAuth(voice: string): Promise<TtsAuth | null> {
 
 export const packs = new Packs(packageDir(), dataDir);
 
+/** 礼物榜 + 礼物知识库（本日/本月 + 按天汇总） */
+export const giftBoard = new GiftBoard(dataDir);
+
 export function currentCharacter(): CharacterManifest | null {
   return packs.character(settings.character);
 }
@@ -262,7 +299,7 @@ export const show = new LiveShow(
     persist: (snapshot) => saveLive(snapshot),
     onGame: (source) => placeGame(source),
   },
-  { dataDir, names: currentCharacter()?.names ?? [], idleAfterMs: () => settings.idleAfterSec * 1000, pace: () => ownerPace(settings.pace), board: () => settings.boardText, title: () => settings.liveTitle, gameChatGapMs: () => (settings.gameChatGapSec ?? 15) * 1000, blocked: (uid) => settings.blocked.some((b) => b.uid === uid) },
+  { dataDir, names: currentCharacter()?.names ?? [], idleAfterMs: () => settings.idleAfterSec * 1000, pace: () => ownerPace(settings.pace), board: () => settings.boardText, title: () => settings.liveTitle, gameChatGapMs: () => (settings.gameChatGapSec ?? 15) * 1000, plugEverySec: () => settings.plugEverySec, autoNext, bookMode: () => settings.bookMode, bookByQuery: (query) => { const books = listBooks(join(dataDir, 'books')); const found = books.find((b) => b.title.includes(query) || query.includes(b.title)); if (!found) return null; const book = loadBook(join(dataDir, 'books'), found.id); if (!book) return null; show.openBook(book); return book.title; }, songByQuery: (query) => { const hit = matchSong(listSongs(join(dataDir, 'songs')), query); return hit ? songRequest(hit) : null; }, blocked: (uid) => settings.blocked.some((b) => b.uid === uid), onDiary: (text) => { if (!settings.diaryToDynamic) return; void social.postDynamic(text).then(() => hooks.log?.('info', '直播日记已发 B 站动态')).catch((err) => hooks.log?.('warn', '直播日记发动态失败：' + (err as Error).message)); }, styleLine: () => { const p = settings.persona; const personaLine = p === 'cool' ? '现在的人设：御姐，冷静、话少、偶尔毒舌，不撒娇。' : p === 'sassy' ? '现在的人设：毒舌，嘴硬心软，爱吐槽但不伤人。' : '现在的人设：甜妹，软、黏人、爱撒娇，多用语气词。'; const radio = settings.radioMode ? ' 另外现在是深夜电台：语速慢一点、声音轻一点，多读观众来信和小故事，少用夸张语气。' : ''; return '（主持设定，这一轮也按这个来：' + personaLine + radio + '）'; }, unlockYuan: () => settings.unlockYuan, giftLog: (e) => { giftBoard.add(e); const data = giftBoard.summary(); show.stage.broadcast({ type: 'gifts', today: data.today, month: data.month }); }, stopVisit: () => { void watchRoom(null).catch(() => undefined); } },
 );
 
 /**
@@ -286,9 +323,56 @@ export function placeGame(source: GameSource | null): void {
   })();
 }
 
+/** 查房：正在放的对方房间（自动收起的定时器） */
+let roomTimer: NodeJS.Timeout | null = null;
+
+/** 上一次查房失败的原因（给工具回话用，方便她告诉观众） */
+export let lastRoomError = '';
+
+/** 把 B 站直播流包一层本地代理：OBS 直接拉会 403（不带 Referer/UA） */
+function roomProxy(src: string): string {
+  const base = new URL(server.url);
+  return `http://127.0.0.1:${base.port}/room?token=${encodeURIComponent(base.searchParams.get('token') ?? '')}&src=${encodeURIComponent(src)}`;
+}
+
+/** 把别人直播间的画面拉到 OBS 舞台上（视频位），最多放 minutes 分钟；传 null 就撤掉 */
+export async function watchRoom(url: string | null, title = '', minutes = 3, room = 0): Promise<boolean> {
+  lastRoomError = '';
+  const template = packs.template(settings.template);
+  // 和点播视频一模一样的位置和大小
+  const rect = template ? videoRect(template) : { x: 0, y: 0, w: 1920, h: 1080 };
+  let obs: Awaited<ReturnType<typeof connectObs>> | null = null;
+  try {
+    obs = await connectObs(false);
+    await showRoomStream(obs, url ? roomProxy(url) : null, rect);
+  } catch (err) {
+    lastRoomError = (err as Error).message;
+    hooks.log('warn', `查房画面没能放进 OBS：${(err as Error).message}`);
+    return false;
+  } finally {
+    obs?.close();
+  }
+  if (roomTimer) clearTimeout(roomTimer);
+  roomTimer = null;
+  if (url) {
+    // 分钟数夹在 1～10 之间：3 就是 3 分钟（之前写成 Math.max(30, …) 变成了最少 30 分钟，倒计时显示 30:00）
+    const keepMinutes = Math.max(1, Math.min(10, Number(minutes) || 3));
+    show.beginVisit(keepMinutes);
+    show.stage.broadcast({ type: 'visit', visit: { room, title: title || '别人的直播间', until: Date.now() + keepMinutes * 60_000 } });
+    show.stage.broadcast({ type: 'notice', text: `查房中：${title || '别人的直播间'}` });
+    roomTimer = setTimeout(() => void watchRoom(null).catch(() => undefined), keepMinutes * 60_000);
+  } else {
+    if (roomTimer) clearTimeout(roomTimer);
+    roomTimer = null;
+    show.endVisit();
+    show.stage.broadcast({ type: 'visit', visit: null });
+    show.stage.broadcast({ type: 'notice', text: '' });
+  }
+  return true;
+}
+
 /** 告示板换了：舞台马上换（之后连上的舞台页也拿到最新的） */
-export function publishBoard(): void {
-  show.stage.broadcast({ type: 'board', text: settings.boardText });
+export function publishBoard(): void {  show.stage.broadcast({ type: 'board', text: settings.boardText });
 }
 publishBoard();
 
@@ -323,6 +407,9 @@ export const server = new StageServer({
   packs,
   stage: show.stage,
   current: () => ({ character: settings.character, template: settings.template }),
+  songs: join(dataDir, 'songs'),
+  mediaDir: join(dataDir, 'media'),
+  scenesDir: join(dataDir, 'scenes'),
   media: {
     source: (id) => show.player.source(id),
     report: (id, state, positionSec, detail) => show.player.report(id, state, positionSec, detail),
@@ -331,7 +418,31 @@ export const server = new StageServer({
 });
 
 export async function cookie(): Promise<string> {
-  return hooks.secret(SECRETS.cookie);
+  // 先问 DSH 的凭据服务；插件开播前还没有 agent 会话时它可能还没装上，读不到就用凭据文件兜底
+  const hit = await hooks.secret(SECRETS.cookie).catch(() => '');
+  if (hit && hit.includes('=')) return hit;
+  const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
+  const file = join(home, '.credentials.yaml');
+  if (!existsSync(file)) return hit ?? '';
+  try {
+    const text = readFileSync(file, 'utf8');
+    const at = text.indexOf('BILIBILI_COOKIE:');
+    if (at < 0) return hit ?? '';
+    const rest = text.slice(at + 'BILIBILI_COOKIE:'.length);
+    const lines: string[] = [];
+    for (const raw of rest.split(/\r?\n/)) {
+      if (!raw.trim()) {
+        if (lines.length) break;
+        continue;
+      }
+      if (!/^\s/.test(raw)) break;
+      lines.push(raw.trim());
+    }
+    const cookieText = lines.join(' ').trim();
+    return cookieText.includes('=') ? cookieText : (hit ?? '');
+  } catch {
+    return hit ?? '';
+  }
 }
 
 /** 推流到 B 站：开播拿推流码、OBS 推流、下播 */
@@ -364,6 +475,82 @@ export const broadcast = new Broadcast({
   onStreaming: () => show.markBroadcast(),
   log: (level, message) => hooks.log(level, message),
 });
+
+// 推流看门狗：OBS 会“假推”（状态还在推、时间码不动、B 站收不到数据）。
+// 每 15 秒看一次推流时长，连续 3 次（约 45 秒）没变就自动停推重推。
+let lastStreamTick = { timecode: '', still: 0 };
+setInterval(() => {
+  try {
+    const status = broadcast.status();
+    if (status.phase !== 'streaming' || !status.health) {
+      lastStreamTick = { timecode: '', still: 0 };
+      return;
+    }
+    const timecode = status.health.timecode;
+    if (timecode && timecode === lastStreamTick.timecode) lastStreamTick.still += 1;
+    else lastStreamTick = { timecode, still: 0 };
+    if (lastStreamTick.still >= 3) {
+      lastStreamTick.still = 0;
+      hooks.log('warn', '推流 45 秒没有新数据（假推），自动重推');
+      void broadcast
+        .stop()
+        .catch(() => undefined)
+        .then(() => broadcast.start());
+    }
+  } catch {
+    // 看门狗自己出错不影响直播
+  }
+}, 15_000).unref?.();
+
+// 插件重启后，OBS 里可能还留着上次查房没来得及撤的画面源：启动时清掉，别一直盖着舞台
+setTimeout(() => void watchRoom(null).catch(() => undefined), 4000).unref?.();
+
+// 巡检：没在串门却还有查房画面源（定时器被重启打断、流程出错），就悄悄清掉，别让它一直播下去
+setInterval(() => {
+  if (show.isVisiting) return;
+  void (async () => {
+    let obs: Awaited<ReturnType<typeof connectObs>> | null = null;
+    try {
+      obs = await connectObs(false);
+      await clearRoomStream(obs);
+    } catch {
+      // OBS 没开 / 连不上：下次再说
+    } finally {
+      obs?.close();
+    }
+  })();
+}, 20_000).unref?.();
+
+// 千问健康检查：连续 3 次调不通就把 modelFallback 打开，控制台看到后把会话切到 DeepSeek
+let modelDown = 0;
+let modelFallback = false;
+export function modelFallbackActive(): boolean {
+  return modelFallback;
+}
+setInterval(async () => {
+  try {
+    const key = await hooks.secret('QWEN_API_KEY');
+    if (!key) return;
+    const res = await fetch('https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: 'qwen3.8-flash', messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.ok) {
+      modelDown = 0;
+      modelFallback = false;
+      return;
+    }
+    modelDown += 1;
+  } catch {
+    modelDown += 1;
+  }
+  if (modelDown >= 3 && !modelFallback) {
+    modelFallback = true;
+    hooks.log('warn', '千问连续 3 次调不通，切到 DeepSeek');
+  }
+}, 90_000).unref?.();
 
 /** 她给观众发私信（开播账号）：B 站「对方没关注只能发一条」等规矩在这里管 */
 export const dm = new DmManager(new BiliAccount(cookie), join(dataDir, 'dm.json'));
@@ -411,6 +598,68 @@ setInterval(() => {
 
 /** 她搜视频、看视频、在舞台上放视频（开播账号的 Cookie：AI 字幕要登录才给） */
 export const videos = new BiliVideos(cookie);
+
+/** 自动播放合集：缓存分集列表，循环往下放；有人点播会被打断 */
+let autoSeason: Array<{ bvid: string; title: string }> = [];
+let autoCursor = 0;
+/** 最近自动播过的分集：20 分钟内不重播同一集（合集只有几集时不至于一集接一集重复） */
+const autoRecent: Array<{ bvid: string; at: number }> = [];
+function autoRemember(bvid: string): void {
+  autoRecent.push({ bvid, at: Date.now() });
+  while (autoRecent.length > 20) autoRecent.shift();
+}
+function autoPlayedRecently(bvid: string): boolean {
+  const now = Date.now();
+  return autoRecent.some((r) => r.bvid === bvid && now - r.at < 20 * 60_000);
+}
+
+async function loadAutoSeason(): Promise<Array<{ bvid: string; title: string }>> {
+  if (autoSeason.length) return autoSeason;
+  const bv = settings.autoSeasonBv || 'BV1SBsf6mE3t';
+  const body = await videos.get<any>(`https://api.bilibili.com/x/web-interface/view?bvid=${bv}`);
+  const season = body?.data?.ugc_season;
+  const list: Array<{ bvid: string; title: string }> = [];
+  for (const section of season?.sections ?? []) {
+    for (const ep of section.episodes ?? []) {
+      if (ep?.bvid) list.push({ bvid: String(ep.bvid), title: String(ep.title ?? '') });
+    }
+  }
+  autoSeason = list;
+  autoCursor = 0;
+  return autoSeason;
+}
+
+async function autoNext(): Promise<PlayRequest | null> {
+  if (!settings.autoPlay || !settings.autoSeasonBv) return null;
+  const list = await loadAutoSeason();
+  if (!list.length) return null;
+  for (let i = 0; i < list.length; i++) {
+    const item = list[autoCursor++ % list.length];
+    // 20 分钟内播过的不再重复；整圈都播过了才允许从头来
+    if (autoPlayedRecently(item.bvid) && i < list.length - 1) continue;
+    const ref = await videos.resolve(item.bvid);
+    if (!ref) continue;
+    const info = await videos.info(ref);
+    const part = info?.parts?.[0];
+    if (!info || !part) continue;
+    const total = info.durationSec || part.durationSec || 0;
+    if (total > 600) continue;
+    const url = await videos.playUrl(info.bvid, part.cid);
+    if (!url) continue;
+    autoRemember(info.bvid);
+    return {
+      bvid: info.bvid,
+      title: info.title || item.title,
+      up: info.up?.name ?? '',
+      url,
+      fromSec: 0,
+      untilSec: total || 600,
+      durationSec: total,
+      auto: true,
+    };
+  }
+  return null;
+}
 
 /** 视频没字幕时听写（本机的 faster-whisper） */
 export const asr = new Whisper({

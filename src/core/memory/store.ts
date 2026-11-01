@@ -77,6 +77,22 @@ interface ViewerRow {
   last_stream: number | null; gift_yuan: number; guard_level: number; nickname: string | null; appraisal: string | null; notes: string;
 }
 
+/** 共创连续剧的一章 */
+export interface StoryRow {
+  id: number;
+  chapter: number;
+  title: string;
+  question: string;
+  option_a: string;
+  option_b: string;
+  votes_a: number;
+  votes_b: number;
+  opened_at: number;
+  resolved_at: number | null;
+  chosen: 'a' | 'b' | null;
+  summary: string | null;
+}
+
 function parse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
   try {
@@ -145,6 +161,32 @@ export class LiveMemoryStore {
         updated_at INTEGER NOT NULL,
         UNIQUE (kind, subject)
       );
+      CREATE TABLE IF NOT EXISTS story (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        chapter    INTEGER NOT NULL,
+        title      TEXT    NOT NULL,
+        question   TEXT    NOT NULL DEFAULT '',
+        option_a   TEXT    NOT NULL DEFAULT '',
+        option_b   TEXT    NOT NULL DEFAULT '',
+        votes_a    INTEGER NOT NULL DEFAULT 0,
+        votes_b    INTEGER NOT NULL DEFAULT 0,
+        opened_at  INTEGER NOT NULL,
+        resolved_at INTEGER,
+        chosen     TEXT,
+        summary    TEXT
+      );
+      CREATE TABLE IF NOT EXISTS story_votes (
+        story_id INTEGER NOT NULL,
+        uid      TEXT    NOT NULL,
+        side     TEXT    NOT NULL,
+        PRIMARY KEY (story_id, uid)
+      );
+      CREATE TABLE IF NOT EXISTS book_progress (
+        book_id    TEXT    PRIMARY KEY,
+        chapter    INTEGER NOT NULL DEFAULT 0,
+        para       INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
     `);
     this.migrate();
   }
@@ -153,6 +195,9 @@ export class LiveMemoryStore {
   private migrate(): void {
     const cols = (this.db.prepare('PRAGMA table_info(streams)').all() as Array<{ name: string }>).map((c) => c.name);
     if (!cols.includes('broadcast')) this.db.exec('ALTER TABLE streams ADD COLUMN broadcast INTEGER NOT NULL DEFAULT 1');
+    const viewerCols = (this.db.prepare('PRAGMA table_info(viewers)').all() as Array<{ name: string }>).map((c) => c.name);
+    if (!viewerCols.includes('affection')) this.db.exec('ALTER TABLE viewers ADD COLUMN affection INTEGER NOT NULL DEFAULT 0');
+    if (!viewerCols.includes('chats')) this.db.exec('ALTER TABLE viewers ADD COLUMN chats INTEGER NOT NULL DEFAULT 0');
   }
 
   close(): void {
@@ -208,8 +253,8 @@ export class LiveMemoryStore {
     const row = this.db.prepare('SELECT names, last_stream FROM viewers WHERE platform = ? AND uid = ?').get(platform, uid) as
       Pick<ViewerRow, 'names' | 'last_stream'> | undefined;
     if (!row) {
-      this.db.prepare(`INSERT INTO viewers (platform, uid, names, first_seen, last_seen, visits, last_stream)
-        VALUES (?, ?, ?, ?, ?, 1, ?)`).run(platform, uid, JSON.stringify(name ? [name] : []), now, now, streamId);
+      this.db.prepare(`INSERT INTO viewers (platform, uid, names, first_seen, last_seen, visits, last_stream, affection)
+        VALUES (?, ?, ?, ?, ?, 1, ?, 1)`).run(platform, uid, JSON.stringify(name ? [name] : []), now, now, streamId);
       return { firstThisStream: true };
     }
     const names = parse<string[]>(row.names, []);
@@ -224,13 +269,92 @@ export class LiveMemoryStore {
     return { firstThisStream };
   }
 
+  /** 说了句话：聊天数 +1，好感度涨一点 */
+  addChat(platform: LivePlatform, uid: string, points = 1): void {
+    this.db.prepare('UPDATE viewers SET chats = chats + 1, affection = affection + ? WHERE platform = ? AND uid = ?')
+      .run(points, platform, uid);
+  }
+
+  /** 送礼 / 上舰：好感度按价值加 */
+  addAffection(platform: LivePlatform, uid: string, points: number): void {
+    const n = Math.max(1, Math.round(points));
+    this.db.prepare('UPDATE viewers SET affection = affection + ? WHERE platform = ? AND uid = ?').run(n, platform, uid);
+  }
+
+  /** 好感度最高的几位常客（舞台上的「常客」和她的欢迎词用） */
+  topViewers(limit = 5): Array<{ uid: string; name: string; visits: number; chats: number; affection: number; yuan: number; lastSeen: number }> {
+    const rows = this.db.prepare(`SELECT uid, names, nickname, visits, chats, affection, gift_yuan, last_seen
+      FROM viewers ORDER BY affection DESC, visits DESC LIMIT ?`).all(limit) as Array<{
+      uid: string; names: string; nickname: string | null; visits: number; chats: number; affection: number; gift_yuan: number; last_seen: number;
+    }>;
+    return rows.map((r) => {
+      const names = parse<string[]>(r.names, []);
+      return {
+        uid: r.uid,
+        name: r.nickname || names[names.length - 1] || r.uid,
+        visits: r.visits,
+        chats: r.chats,
+        affection: r.affection,
+        yuan: r.gift_yuan,
+        lastSeen: r.last_seen,
+      };
+    });
+  }
+
   /** 这位观众在本场说的话，只留最近 MAX_LINES 句 */
-  addLine(platform: LivePlatform, uid: string, streamId: number, text: string, now: number): void {
-    this.db.prepare('INSERT INTO viewer_lines (platform, uid, stream_id, at, text) VALUES (?, ?, ?, ?, ?)')
+  addLine(platform: LivePlatform, uid: string, streamId: number, text: string, now: number): void {    this.db.prepare('INSERT INTO viewer_lines (platform, uid, stream_id, at, text) VALUES (?, ?, ?, ?, ?)')
       .run(platform, uid, streamId, now, text);
     this.db.prepare(`DELETE FROM viewer_lines WHERE rowid IN (
       SELECT rowid FROM viewer_lines WHERE platform = ? AND uid = ? AND stream_id = ? ORDER BY at DESC LIMIT -1 OFFSET ?)`)
       .run(platform, uid, streamId, MAX_LINES);
+  }
+
+  // ── 共创连续剧 ───────────────────────────────────────
+
+  /** 现在这一章（没结束的那一章）；没有就返回 null */
+  currentStory(): StoryRow | null {
+    const row = this.db.prepare('SELECT * FROM story WHERE resolved_at IS NULL ORDER BY id DESC LIMIT 1').get() as StoryRow | undefined;
+    return row ?? null;
+  }
+
+  /** 最近一章（不管结没结束） */
+  lastStory(): StoryRow | null {
+    const row = this.db.prepare('SELECT * FROM story ORDER BY id DESC LIMIT 1').get() as StoryRow | undefined;
+    return row ?? null;
+  }
+
+  openStory(chapter: number, title: string, question: string, a: string, b: string, now: number): StoryRow {
+    const info = this.db.prepare(`INSERT INTO story (chapter, title, question, option_a, option_b, opened_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(chapter, title, question, a, b, now);
+    return this.db.prepare('SELECT * FROM story WHERE id = ?').get(Number(info.lastInsertRowid)) as StoryRow;
+  }
+
+  /** 投票；同一个人同一章只算一次。返回这一章的最新数据 */
+  voteStory(storyId: number, uid: string, side: 'a' | 'b'): StoryRow | null {
+    try {
+      this.db.prepare('INSERT INTO story_votes (story_id, uid, side) VALUES (?, ?, ?)').run(storyId, uid, side);
+    } catch {
+      return null; // 已经投过
+    }
+    this.db.prepare(`UPDATE story SET votes_${side} = votes_${side} + 1 WHERE id = ?`).run(storyId);
+    return this.db.prepare('SELECT * FROM story WHERE id = ?').get(storyId) as StoryRow;
+  }
+
+  resolveStory(storyId: number, chosen: 'a' | 'b', summary: string, now: number): void {
+    this.db.prepare('UPDATE story SET resolved_at = ?, chosen = ?, summary = ? WHERE id = ?').run(now, chosen, summary, storyId);
+  }
+
+  // ── 读书会进度 ───────────────────────────────────────
+
+  getBookProgress(bookId: string): { chapter: number; para: number } | null {
+    const row = this.db.prepare('SELECT chapter, para FROM book_progress WHERE book_id = ?').get(bookId) as { chapter: number; para: number } | undefined;
+    return row ? { chapter: row.chapter, para: row.para } : null;
+  }
+
+  saveBookProgress(bookId: string, chapter: number, para: number, now: number): void {
+    this.db.prepare(`INSERT INTO book_progress (book_id, chapter, para, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(book_id) DO UPDATE SET chapter = excluded.chapter, para = excluded.para, updated_at = excluded.updated_at`)
+      .run(bookId, chapter, para, now);
   }
 
   addGift(platform: LivePlatform, uid: string, yuan: number, guardLevel?: number): void {

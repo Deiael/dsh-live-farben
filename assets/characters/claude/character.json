@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "claude",
+  "name": "Claude 大人",
+  "names": [
+    "Claude",
+    "Claude大人",
+    "Claude 大人",
+    "克劳德",
+    "小克",
+    "claude"
+  ],
+  "voice": "zh_female_zhixingnv_uranus_bigtts",
+  "renderer": "image",
+  "license": "立绘由主人提供（参考图来源：知乎 @光影伴我飞），仅用于本直播间",
+  "image": {
+    "size": [
+      570,
+      1050
+    ],
+    "idle": "idle.png"
+  }
+}
